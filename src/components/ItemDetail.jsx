@@ -9,6 +9,20 @@ import {
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 
+// Small uppercased mono chip rendered just above the synopsis. Picks up the
+// suite signal color so it reads like a press-tag editorial label.
+const GenreChip = ({ genre }) => (
+  <span style={{
+    alignSelf: 'flex-start',
+    padding: '2px 8px', borderRadius: 2,
+    background: 'color-mix(in oklab, var(--signal) 14%, transparent)',
+    color: 'var(--signal)',
+    fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.18em',
+    textTransform: 'uppercase',
+    border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
+  }}>{genre}</span>
+)
+
 const TogetherRow = ({ item, partner, onToggle }) => {
   const isShared = (item.with || []).includes(partner)
   const recIsPartner = item.recommended_by === partner
@@ -116,7 +130,6 @@ export const ItemDetail = ({
   if (item.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (item.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (item.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
-  if (ext.genre) meta.push(ext.genre)
 
   const setRating = (n) => {
     if (readOnly) return
@@ -177,28 +190,31 @@ export const ItemDetail = ({
             </div>
           </div>
 
-          {/* Synopsis — editable */}
-          {readOnly ? (
-            item.enrichment?.synopsis && (
-              <p style={{ margin: 0, fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text-soft)', textWrap: 'pretty' }}>
-                {item.enrichment.synopsis}
-              </p>
-            )
-          ) : (
-            <EditableField
-              value={item.enrichment?.synopsis || ''}
-              onSave={(v) => onPatch && onPatch(item, { enrichment: { ...(item.enrichment || {}), synopsis: v } })}
-              placeholder="add a synopsis…"
-              multiline
-              displayStyle={{
-                fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6,
-                color: 'var(--text-soft)', textWrap: 'pretty',
-              }}
-              editStyle={{
-                fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text)',
-              }}
-            />
-          )}
+          {/* Synopsis — editable. Genre chip leads as a small tag. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {ext.genre && <GenreChip genre={ext.genre} />}
+            {readOnly ? (
+              item.enrichment?.synopsis && (
+                <p style={{ margin: 0, fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text-soft)', textWrap: 'pretty' }}>
+                  {item.enrichment.synopsis}
+                </p>
+              )
+            ) : (
+              <EditableField
+                value={item.enrichment?.synopsis || ''}
+                onSave={(v) => onPatch && onPatch(item, { enrichment: { ...(item.enrichment || {}), synopsis: v } })}
+                placeholder="add a synopsis…"
+                multiline
+                displayStyle={{
+                  fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6,
+                  color: 'var(--text-soft)', textWrap: 'pretty',
+                }}
+                editStyle={{
+                  fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text)',
+                }}
+              />
+            )}
+          </div>
 
           {(item.type === 'movie' || item.type === 'tv') && (ext.rt_critics != null || ext.rt_audience != null) && (
             <RottenScore critics={ext.rt_critics} audience={ext.rt_audience} />

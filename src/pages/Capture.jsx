@@ -80,7 +80,6 @@ const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
   if (draft.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (draft.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (draft.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
-  if (ext.genre) meta.push(ext.genre)
   const metaLine = meta.filter(Boolean).join(' · ')
 
   return (
@@ -127,16 +126,29 @@ const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
           </FieldReveal>
         )}
         <FieldReveal delay={500}>
-          <EditableField
-            value={draft.enrichment?.synopsis || ''}
-            onSave={patchEnrichment}
-            placeholder="add a synopsis…"
-            multiline
-            displayStyle={{
-              fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.55,
-              color: 'var(--text-soft)', textWrap: 'pretty',
-            }}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {ext.genre && (
+              <span style={{
+                alignSelf: 'flex-start',
+                padding: '2px 8px', borderRadius: 2,
+                background: 'color-mix(in oklab, var(--signal) 14%, transparent)',
+                color: 'var(--signal)',
+                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.18em',
+                textTransform: 'uppercase',
+                border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
+              }}>{ext.genre}</span>
+            )}
+            <EditableField
+              value={draft.enrichment?.synopsis || ''}
+              onSave={patchEnrichment}
+              placeholder="add a synopsis…"
+              multiline
+              displayStyle={{
+                fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.55,
+                color: 'var(--text-soft)', textWrap: 'pretty',
+              }}
+            />
+          </div>
         </FieldReveal>
         {(draft.type === 'movie' || draft.type === 'tv') && ext.rt_critics != null && (
           <FieldReveal delay={580}>

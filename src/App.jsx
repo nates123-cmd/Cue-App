@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditionContext } from './lib/EditionContext'
 import { editionForHour, formatClock, PARTNER } from './lib/meta'
 import { useItems } from './lib/items'
 import { supabase } from './lib/supabase'
+import { backfillMissingImages } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CueBar } from './components/CueBar'
@@ -18,6 +19,7 @@ export default function App() {
   const [density, setDensity] = useState('grid')
   const [now, setNow] = useState(() => new Date())
   const [finishTarget, setFinishTarget] = useState(null) // item awaiting rating+notes
+  const [backfillStatus, setBackfillStatus] = useState(null) // { index, total, title }
 
   const {
     items, loading, addItem, updateItem, deleteItem, finishItem, reload,
@@ -27,6 +29,22 @@ export default function App() {
     const id = setInterval(() => setNow(new Date()), 60 * 1000)
     return () => clearInterval(id)
   }, [])
+
+  // One-shot backfill of image_url for pre-source-provider rows. Runs once per
+  // browser (localStorage flag). Skips Claude so manual edits are preserved.
+  const backfillRanRef = useRef(false)
+  useEffect(() => {
+    if (backfillRanRef.current) return
+    if (loading || items.length === 0) return
+    backfillRanRef.current = true
+    ;(async () => {
+      const updated = await backfillMissingImages(items, {
+        onProgress: (p) => setBackfillStatus(p),
+      })
+      setBackfillStatus(null)
+      if (updated > 0) await reload()
+    })()
+  }, [loading, items, reload])
 
   const edition = editionForHour(now.getHours())
   const resolvedPaper = edition.isPaper
@@ -216,6 +234,22 @@ export default function App() {
             textTransform: 'uppercase',
           }}>
             loading library…
+          </div>
+        )}
+
+        {backfillStatus && (
+          <div style={{
+            position: 'fixed', left: '50%', transform: 'translateX(-50%)',
+            top: 'calc(12px + env(safe-area-inset-top, 0px))', zIndex: 40,
+            padding: '6px 12px', borderRadius: 999,
+            background: 'var(--paper)', border: '1px solid var(--hairline-strong)',
+            color: 'var(--text-soft)', fontFamily: 'var(--mono)', fontSize: 9,
+            letterSpacing: '0.14em', textTransform: 'uppercase',
+            boxShadow: '0 8px 20px -8px rgba(0,0,0,0.4)',
+            maxWidth: 'calc(100vw - 32px)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            enriching {backfillStatus.index}/{backfillStatus.total} · {backfillStatus.title}
           </div>
         )}
 
