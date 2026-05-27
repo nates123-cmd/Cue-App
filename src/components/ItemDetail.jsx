@@ -1,7 +1,7 @@
 // Detail sheet for any item. Override-always-wins: title, synopsis, notes,
 // rating, recommended_by, tags, status are all editable here.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Cover, Mono, RatingDots, RottenScore, Spine, WatchOn,
   btnGhost, btnPrimary, btnTextChip,
@@ -118,10 +118,11 @@ const TagEditor = ({ tags = [], onChange }) => {
 
 export const ItemDetail = ({
   item, onClose, onChangeStatus, onToggleWith,
-  onPatch, onRequestFinish, onPromoteToLibrary,
+  onPatch, onRequestFinish, onPromoteToLibrary, onDelete,
   partner = 'Amanda', recommenders = [],
 }) => {
   if (!item) return null
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const readOnly = item._source !== 'rec' // media/visit-derived items are read-only
   const ext = item.extension || {}
   const meta = []
@@ -372,8 +373,66 @@ export const ItemDetail = ({
               )}
             </div>
           )}
+
+          {onDelete && (
+            <DeleteRow
+              item={item}
+              confirmDelete={confirmDelete}
+              setConfirmDelete={setConfirmDelete}
+              onDelete={onDelete}
+              onClose={onClose}
+            />
+          )}
         </div>
       </div>
     </>
+  )
+}
+
+// Two-step delete row at the bottom of ItemDetail. First tap arms it; second
+// tap (or the explicit Yes button) deletes and closes the sheet. Auto-disarms
+// after ~4 seconds so it doesn't sit primed forever.
+const DeleteRow = ({ item, confirmDelete, setConfirmDelete, onDelete, onClose }) => {
+  useEffect(() => {
+    if (!confirmDelete) return
+    const t = setTimeout(() => setConfirmDelete(false), 4000)
+    return () => clearTimeout(t)
+  }, [confirmDelete, setConfirmDelete])
+
+  return (
+    <div style={{
+      marginTop: 4, paddingTop: 16,
+      borderTop: '1px solid var(--hairline)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <Mono size={9} dim>Danger</Mono>
+      {confirmDelete ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            flex: 1, fontFamily: 'var(--body)', fontSize: 13, color: 'var(--text-soft)',
+          }}>Delete <em style={{ color: 'var(--text)' }}>{item.title}</em>?</span>
+          <button onClick={() => setConfirmDelete(false)} style={{ ...btnGhost, padding: '5px 10px', fontSize: 10 }}>
+            Cancel
+          </button>
+          <button
+            onClick={async () => {
+              try { await onDelete(item) } finally { onClose && onClose() }
+            }}
+            style={{
+              ...btnPrimary, padding: '5px 12px', fontSize: 10,
+              background: '#c43a2a', color: '#fff', borderColor: '#c43a2a',
+            }}
+          >Yes, delete</button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirmDelete(true)}
+          style={{
+            ...btnGhost, alignSelf: 'flex-start', padding: '5px 10px', fontSize: 10,
+            color: '#c43a2a', borderColor: 'color-mix(in oklab, #c43a2a 40%, transparent)',
+          }}
+        >Delete this item</button>
+      )}
+    </div>
   )
 }

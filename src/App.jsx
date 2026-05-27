@@ -278,6 +278,7 @@ export default function App() {
             onPatch={onPatchItem}
             onRequestFinish={onRequestFinish}
             onPromoteToLibrary={onPromoteToLibrary}
+            onDelete={onDelete}
             partner={PARTNER}
             recommenders={recommenders}
           />
