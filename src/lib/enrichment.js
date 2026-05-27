@@ -4,6 +4,8 @@
 
 import { claudeComplete, extractJSON } from './claude'
 import { jwLookup } from './justwatch'
+import { openLibraryLookup } from './sources/openlibrary'
+import { openGraphLookup } from './sources/opengraph'
 
 const SYSTEM = `You enrich titles for a personal recommendation app called Cue.
 You will be given a title and a type. Return JSON ONLY — no prose, no markdown
@@ -162,6 +164,48 @@ function fallbackCard(title, type) {
   }
 }
 
+// Merge an Open Library result (book) over Claude's guesses. Real cover image
+// is the big win; page count / first publish year are also more reliable here.
+function mergeOpenLibrary(merged, ol) {
+  if (!ol) return merged
+  const ext = { ...merged.extension }
+  if (ol.author) ext.author = ol.author
+  if (ol.published_year) ext.published_year = ol.published_year
+  if (ol.page_count) ext.page_count = ol.page_count
+  if (ol.genre && !ext.genre) ext.genre = ol.genre
+  return {
+    ...merged,
+    title: ol.title || merged.title,
+    extension: ext,
+    image_url: ol.image_url || merged.image_url || null,
+    _olHit: !!ol.image_url,
+  }
+}
+
+// Merge OpenGraph article metadata over Claude's guesses. OG gives real source
+// + author + image + title; we still let Claude write the synopsis (OG
+// descriptions are often marketing copy or empty).
+function mergeOpenGraph(merged, og) {
+  if (!og) return merged
+  const ext = { ...merged.extension }
+  if (og.source) ext.source = og.source
+  if (og.author) ext.author = og.author
+  if (og.est_read_min) ext.est_read_min = og.est_read_min
+  if (og.word_count) ext.word_count = og.word_count
+  const links = og.web_url
+    ? [{ label: 'Read', web_url: og.web_url }, ...(merged.links || []).filter((l) => l.label !== 'Read')]
+    : merged.links
+  return {
+    ...merged,
+    title: og.title || merged.title,
+    synopsis: merged.synopsis || og.synopsis || '',
+    extension: ext,
+    image_url: og.image_url || merged.image_url || null,
+    links,
+    _ogHit: true,
+  }
+}
+
 // Merge JustWatch results over Claude's guesses for movie/tv. JW gives real
 // streaming availability (US) + RT/IMDB scores + canonical title/year.
 function mergeJustWatch(merged, jw, type) {
@@ -190,6 +234,22 @@ function mergeJustWatch(merged, jw, type) {
   }
 }
 
+// Per-type external source lookups, run in parallel with Claude.
+function sourceLookupFor(type, input) {
+  if (type === 'movie' || type === 'tv') return jwLookup(input).catch(() => null)
+  if (type === 'book') return openLibraryLookup(input).catch(() => null)
+  if (type === 'article') return openGraphLookup(input).catch(() => null)
+  return Promise.resolve(null)
+}
+
+function applySource(merged, src, type) {
+  if (!src) return merged
+  if (type === 'movie' || type === 'tv') return mergeJustWatch(merged, src, type)
+  if (type === 'book') return mergeOpenLibrary(merged, src)
+  if (type === 'article') return mergeOpenGraph(merged, src)
+  return merged
+}
+
 export async function enrich(title, type) {
   const trimmed = (title || '').trim()
   if (!trimmed) return fallbackCard('', type)
@@ -197,10 +257,9 @@ export async function enrich(title, type) {
   const promptFn = PROMPTS[type]
   if (!promptFn) return fallbackCard(trimmed, type)
 
-  // Kick off JustWatch in parallel for movie/tv — independent of Claude.
-  const jwPromise = (type === 'movie' || type === 'tv')
-    ? jwLookup(trimmed).catch(() => null)
-    : Promise.resolve(null)
+  // Kick off the type-specific external source in parallel with Claude. None of
+  // them throw — they swallow errors and return null.
+  const sourcePromise = sourceLookupFor(type, trimmed)
 
   try {
     const raw = await claudeComplete(promptFn(trimmed), {
@@ -209,10 +268,8 @@ export async function enrich(title, type) {
     })
     const parsed = extractJSON(raw)
     if (!parsed || typeof parsed !== 'object') {
-      // Claude failed but JW might still have something for movie/tv.
-      const jw = await jwPromise
-      const merged = fallbackCard(trimmed, type)
-      return jw ? mergeJustWatch(merged, jw, type) : merged
+      const src = await sourcePromise
+      return applySource(fallbackCard(trimmed, type), src, type)
     }
 
     const baseFallback = fallbackCard(trimmed, type)
@@ -226,11 +283,10 @@ export async function enrich(title, type) {
       links: Array.isArray(parsed.links) && parsed.links.length ? parsed.links : baseFallback.links,
       _fallback: false,
     }
-    const jw = await jwPromise
-    return jw ? mergeJustWatch(merged, jw, type) : merged
+    const src = await sourcePromise
+    return applySource(merged, src, type)
   } catch {
-    const jw = await jwPromise
-    const merged = fallbackCard(trimmed, type)
-    return jw ? mergeJustWatch(merged, jw, type) : merged
+    const src = await sourcePromise
+    return applySource(fallbackCard(trimmed, type), src, type)
   }
 }

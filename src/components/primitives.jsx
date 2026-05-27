@@ -2,6 +2,7 @@
 // (--ink/--paper/--paper-soft/--signal/--text/--muted/--hairline) set on the
 // app root, so they restyle with the day/night and accent tweaks.
 
+import { useState } from 'react'
 import { TypeIcon } from './TypeIcon'
 import { metaFor, TYPE_META } from '../lib/meta'
 
@@ -228,10 +229,37 @@ const VideoCover = ({ item }) => {
   )
 }
 
+// Real-image cover wrapper. Renders the source image (Open Library / TMDB /
+// YouTube thumb / OG image) with object-cover fit. If the image fails to load
+// or the parent type wants the designed look, falls back to the designed cover.
+const ImageCover = ({ item, fallback }) => {
+  const [errored, setErrored] = useState(false)
+  if (errored) return fallback
+  const isLandscape = item.cover_kind === 'thumb' || item.type === 'video'
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'relative', background: '#000', overflow: 'hidden' }}>
+      <img
+        src={item.image_url}
+        alt={item.title}
+        onError={() => setErrored(true)}
+        style={{
+          width: '100%', height: '100%',
+          objectFit: 'cover',
+          objectPosition: isLandscape ? 'center' : 'center top',
+          display: 'block',
+        }}
+      />
+    </div>
+  )
+}
+
 export const Cover = ({ item }) => {
-  if (item.cover_kind === 'thumb') return <VideoCover item={item} />
-  if (item.cover_kind === 'poster') return <StripedCover item={item} />
-  return <TypeCover item={item} />
+  let designed
+  if (item.cover_kind === 'thumb') designed = <VideoCover item={item} />
+  else if (item.cover_kind === 'poster') designed = <StripedCover item={item} />
+  else designed = <TypeCover item={item} />
+  if (item.image_url) return <ImageCover item={item} fallback={designed} />
+  return designed
 }
 
 // ── rotten tomatoes mini ─────────────────────────────────────
