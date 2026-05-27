@@ -3,6 +3,7 @@
 // failure. Never let a bad enrichment block a capture.
 
 import { claudeComplete, extractJSON } from './claude'
+import { jwLookup } from './justwatch'
 
 const SYSTEM = `You enrich titles for a personal recommendation app called Cue.
 You will be given a title and a type. Return JSON ONLY — no prose, no markdown
@@ -188,6 +189,34 @@ function fallbackCard(title, type) {
   }
 }
 
+// Merge JustWatch results over Claude's guesses for movie/tv. JW gives real
+// streaming availability (US) + RT/IMDB scores + canonical title/year.
+function mergeJustWatch(merged, jw, type) {
+  if (!jw) return merged
+  const ext = { ...merged.extension }
+  if (jw.where_to_find?.length) {
+    ext.streaming_on = jw.where_to_find.map((w) => w.label)
+  }
+  if (jw.scoring?.rt != null) ext.rt_critics = jw.scoring.rt
+  if (jw.scoring?.imdb != null) ext.imdb = jw.scoring.imdb
+  if (jw.year) {
+    if (type === 'movie') ext.release_year = jw.year
+    if (type === 'tv') ext.first_air_year = jw.year
+  }
+  const jwLinks = (jw.where_to_find || []).map((w) => ({ label: w.label, web_url: w.url }))
+  // Keep generic discovery links (Letterboxd/IMDb) after the streaming links.
+  const genericLinks = (merged.links || []).filter((l) =>
+    !jwLinks.some((j) => j.label === l.label))
+  return {
+    ...merged,
+    title: jw.title || merged.title,
+    synopsis: merged.synopsis || jw.summary || '',
+    extension: ext,
+    links: jwLinks.length ? [...jwLinks, ...genericLinks] : merged.links,
+    _jwHit: true,
+  }
+}
+
 export async function enrich(title, type) {
   const trimmed = (title || '').trim()
   if (!trimmed) return fallbackCard('', type)
@@ -195,26 +224,40 @@ export async function enrich(title, type) {
   const promptFn = PROMPTS[type]
   if (!promptFn) return fallbackCard(trimmed, type)
 
+  // Kick off JustWatch in parallel for movie/tv — independent of Claude.
+  const jwPromise = (type === 'movie' || type === 'tv')
+    ? jwLookup(trimmed).catch(() => null)
+    : Promise.resolve(null)
+
   try {
     const raw = await claudeComplete(promptFn(trimmed), {
       system: SYSTEM,
       max_tokens: 800,
     })
     const parsed = extractJSON(raw)
-    if (!parsed || typeof parsed !== 'object') return fallbackCard(trimmed, type)
+    if (!parsed || typeof parsed !== 'object') {
+      // Claude failed but JW might still have something for movie/tv.
+      const jw = await jwPromise
+      const merged = fallbackCard(trimmed, type)
+      return jw ? mergeJustWatch(merged, jw, type) : merged
+    }
 
-    const merged = fallbackCard(trimmed, type)
-    return {
-      ...merged,
-      title: parsed.title || merged.title,
+    const baseFallback = fallbackCard(trimmed, type)
+    const merged = {
+      ...baseFallback,
+      title: parsed.title || baseFallback.title,
       synopsis: parsed.synopsis || '',
-      extension: { ...merged.extension, ...(parsed.extension || {}) },
-      image_tone: parsed.image_tone || merged.image_tone,
-      cover_kind: parsed.cover_kind || merged.cover_kind,
-      links: Array.isArray(parsed.links) && parsed.links.length ? parsed.links : merged.links,
+      extension: { ...baseFallback.extension, ...(parsed.extension || {}) },
+      image_tone: parsed.image_tone || baseFallback.image_tone,
+      cover_kind: parsed.cover_kind || baseFallback.cover_kind,
+      links: Array.isArray(parsed.links) && parsed.links.length ? parsed.links : baseFallback.links,
       _fallback: false,
     }
+    const jw = await jwPromise
+    return jw ? mergeJustWatch(merged, jw, type) : merged
   } catch {
-    return fallbackCard(trimmed, type)
+    const jw = await jwPromise
+    const merged = fallbackCard(trimmed, type)
+    return jw ? mergeJustWatch(merged, jw, type) : merged
   }
 }
