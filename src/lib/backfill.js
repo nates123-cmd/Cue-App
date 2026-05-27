@@ -1,18 +1,21 @@
-// One-shot image_url backfill for existing library rows. Runs once per browser
-// (localStorage flag) the first time the user lands after the source providers
-// were added. Skips Claude entirely — we only ADD provider-sourced metadata
-// (image_url + a couple of facts) so manual edits to synopsis / image_tone /
-// links / etc. are preserved.
+// One-shot backfill for existing library rows. Runs once per browser
+// (localStorage flag) after a key/source provider gets added.
+//
+// Two passes per row:
+//   1. Source provider (TMDB / Open Library / OpenGraph / YouTube) →
+//      fills image_url + provider-native extension fields.
+//   2. Claude — small focused call that ONLY fills empty synopsis / genre.
+//      Won't overwrite any field the user (or earlier enrichment) already set.
 
 import { supabase } from './supabase'
 import { tmdbLookup } from './sources/tmdb'
 import { openLibraryLookup } from './sources/openlibrary'
 import { openGraphLookup } from './sources/opengraph'
 import { youtubeLookup } from './sources/youtube'
+import { claudeComplete, extractJSON } from './claude'
 
-// Bump the version suffix to force backfill to retry on next load — useful
-// when the previous pass ran without API keys forwarded to the build.
-const FLAG = 'cue:backfill:image_url:v2'
+// Bump the version suffix to force backfill to retry on next load.
+const FLAG = 'cue:backfill:image_url:v3'
 
 async function lookupFor(type, input) {
   if (type === 'movie' || type === 'tv') return tmdbLookup(input, type).catch(() => null)
@@ -22,14 +25,13 @@ async function lookupFor(type, input) {
   return null
 }
 
-// Build a small patch from a source result. Only fill empty fields — never
-// clobber values the user (or earlier enrichment) already wrote.
+// Build a patch from a source result. Only fill empty fields.
 function patchFromSource(item, src, type) {
-  if (!src) return null
+  if (!src) return { patch: {}, mergedExt: { ...(item.extension || {}) }, mergedSynopsis: item.enrichment?.synopsis || '' }
   const ext = { ...(item.extension || {}) }
   let changedExt = false
   const fill = (key, val) => {
-    if (val == null) return
+    if (val == null || val === '') return
     if (ext[key] == null || ext[key] === '') { ext[key] = val; changedExt = true }
   }
   if (type === 'movie' && src.year) fill('release_year', src.year)
@@ -52,19 +54,55 @@ function patchFromSource(item, src, type) {
   }
   const patch = {}
   if (src.image_url && !item.image_url) patch.image_url = src.image_url
+
+  // Sources may also carry a synopsis (TMDB.overview, OG.description, YT.description).
+  // Use it ONLY when the local synopsis is empty.
+  const haveSynopsis = !!(item.enrichment?.synopsis && item.enrichment.synopsis.trim())
+  let mergedSynopsis = item.enrichment?.synopsis || ''
+  if (!haveSynopsis && src.synopsis) {
+    patch.summary = src.synopsis
+    mergedSynopsis = src.synopsis
+  }
+
   if (changedExt) patch.extension = ext
-  return Object.keys(patch).length ? patch : null
+  return { patch, mergedExt: ext, mergedSynopsis }
+}
+
+// Small focused Claude call. Asks ONLY for synopsis + genre and returns JSON.
+async function claudeSynopsisAndGenre(type, title) {
+  try {
+    const raw = await claudeComplete(
+      `Provide a 2-3 sentence synopsis and a short single-phrase genre for this ${type}: "${title}". Return JSON ONLY (no prose, no markdown), exactly this shape:\n{"synopsis":"...","genre":"..."}`,
+      {
+        system: 'You enrich titles for a personal recommendation app. Be accurate; if you do not know, return empty strings rather than guessing. Return JSON only.',
+        max_tokens: 250,
+      }
+    )
+    const parsed = extractJSON(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      synopsis: typeof parsed.synopsis === 'string' ? parsed.synopsis.trim() : '',
+      genre: typeof parsed.genre === 'string' ? parsed.genre.trim() : '',
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function backfillMissingImages(items, opts = {}) {
   const { force = false, onProgress } = opts
   if (!force && typeof localStorage !== 'undefined' && localStorage.getItem(FLAG)) return 0
 
-  const candidates = items.filter((i) =>
-    i._source === 'rec'
-    && !i.image_url
-    && ['book', 'tv', 'movie', 'article', 'video'].includes(i.type)
-  )
+  // Candidates: rec rows missing an image_url, OR missing synopsis, OR missing
+  // genre. We only act on items where at least one of those gaps exists.
+  const candidates = items.filter((i) => {
+    if (i._source !== 'rec') return false
+    if (!['book', 'tv', 'movie', 'article', 'video'].includes(i.type)) return false
+    const noImage = !i.image_url
+    const noSynopsis = !i.enrichment?.synopsis || !i.enrichment.synopsis.trim()
+    const noGenre = !i.extension?.genre
+    return noImage || noSynopsis || noGenre
+  })
   if (candidates.length === 0) {
     if (typeof localStorage !== 'undefined') localStorage.setItem(FLAG, String(Date.now()))
     return 0
@@ -74,9 +112,27 @@ export async function backfillMissingImages(items, opts = {}) {
   for (let n = 0; n < candidates.length; n++) {
     const item = candidates[n]
     onProgress && onProgress({ index: n + 1, total: candidates.length, title: item.title })
+
+    // Pass 1: source provider.
     const src = await lookupFor(item.type, item.title)
-    const patch = patchFromSource(item, src, item.type)
-    if (!patch) continue
+    const { patch, mergedExt, mergedSynopsis } = patchFromSource(item, src, item.type)
+
+    // Pass 2: Claude fills only what's STILL missing after the source pass.
+    const stillNoSynopsis = !mergedSynopsis || !mergedSynopsis.trim()
+    const stillNoGenre = !mergedExt.genre
+    if (stillNoSynopsis || stillNoGenre) {
+      const c = await claudeSynopsisAndGenre(item.type, item.title)
+      if (c) {
+        if (stillNoSynopsis && c.synopsis) patch.summary = c.synopsis
+        if (stillNoGenre && c.genre) {
+          const ext = patch.extension || { ...mergedExt }
+          ext.genre = c.genre
+          patch.extension = ext
+        }
+      }
+    }
+
+    if (Object.keys(patch).length === 0) continue
     const { error } = await supabase
       .from('recommendations')
       .update(patch)
