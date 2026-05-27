@@ -37,14 +37,6 @@ export function TypeIcon({ type, size = 18, weight = 1.5 }) {
           <path d="M10 9.5l5 2.5-5 2.5v-5z" fill="currentColor" stroke="none" />
         </svg>
       )
-    case 'restaurant':
-      // fork + knife
-      return (
-        <svg viewBox="0 0 24 24" style={s}>
-          <path d="M7 3v8m-2-8v5a2 2 0 0 0 4 0V3M7 11v10" />
-          <path d="M17 3c-1.5 0-3 1.5-3 5s1.5 5 3 5v8" />
-        </svg>
-      )
     default:
       return null
   }

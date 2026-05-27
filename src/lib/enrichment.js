@@ -129,52 +129,25 @@ Return JSON with this exact shape:
   ]
 }
 ${SHARED_RULES}`,
-
-  restaurant: (title) => `Enrich this restaurant: "${title}"
-
-Return JSON with this exact shape:
-{
-  "title": "restaurant name",
-  "synopsis": "2-3 sentences (vibe, what it's known for)",
-  "extension": {
-    "neighborhood": "...",
-    "cuisine": "...",
-    "price_level": 0,
-    "address": "...",
-    "genre": "..."
-  },
-  "image_tone": ["#hex", "#hex"],
-  "cover_kind": "venue",
-  "links": [
-    { "label": "Google Maps" },
-    { "label": "Resy" },
-    { "label": "Website" }
-  ]
-}
-${SHARED_RULES}
-- price_level is 1-4 ($, $$, $$$, $$$$)`,
 }
 
 // Minimal fallback — all fields manually editable.
 function fallbackCard(title, type) {
   const tones = {
-    book:       ['#2a2820', '#8a8260'],
-    tv:         ['#0e2533', '#3a7da3'],
-    movie:      ['#2a1a1f', '#a35a7a'],
-    article:    ['#23252a', '#7a7d85'],
-    video:      ['#2a1f1a', '#a3633a'],
-    restaurant: ['#1a2a2e', '#3a7a8a'],
+    book:    ['#2a2820', '#8a8260'],
+    tv:      ['#0e2533', '#3a7da3'],
+    movie:   ['#2a1a1f', '#a35a7a'],
+    article: ['#23252a', '#7a7d85'],
+    video:   ['#2a1f1a', '#a3633a'],
   }
   const links = {
-    book:       [{ label: 'Libby' }, { label: 'Goodreads' }, { label: 'Bookshop' }],
-    tv:         [{ label: 'JustWatch' }, { label: 'Letterboxd' }, { label: 'IMDb' }],
-    movie:      [{ label: 'JustWatch' }, { label: 'Letterboxd' }, { label: 'IMDb' }],
-    article:    [{ label: 'Read' }],
-    video:      [{ label: 'YouTube' }],
-    restaurant: [{ label: 'Google Maps' }, { label: 'Resy' }, { label: 'Website' }],
+    book:    [{ label: 'Libby' }, { label: 'Goodreads' }, { label: 'Bookshop' }],
+    tv:      [{ label: 'JustWatch' }, { label: 'Letterboxd' }, { label: 'IMDb' }],
+    movie:   [{ label: 'JustWatch' }, { label: 'Letterboxd' }, { label: 'IMDb' }],
+    article: [{ label: 'Read' }],
+    video:   [{ label: 'YouTube' }],
   }
-  const coverKind = type === 'restaurant' ? 'venue'
-    : type === 'video' ? 'thumb'
+  const coverKind = type === 'video' ? 'thumb'
     : (type === 'movie' || type === 'tv') ? 'poster'
     : 'type'
   return {

@@ -1,15 +1,13 @@
-// Type registry. Six types per CUE_SPEC §3; restaurant uses VenueCover and
-// the multi-visit restaurant_visits table on save.
+// Type registry. Cue is media-only as of 2026-05-27 — restaurants moved to Ink.
 export const TYPE_META = {
-  book:       { label: 'Book',       plural: 'Books',       spine: 'BK' },
-  tv:         { label: 'TV',         plural: 'TV',          spine: 'TV' },
-  movie:      { label: 'Movie',      plural: 'Movies',      spine: 'MV' },
-  article:    { label: 'Article',    plural: 'Articles',    spine: 'AR' },
-  video:      { label: 'Video',      plural: 'Videos',      spine: 'VD' },
-  restaurant: { label: 'Restaurant', plural: 'Restaurants', spine: 'RT' },
+  book:    { label: 'Book',    plural: 'Books',    spine: 'BK' },
+  tv:      { label: 'TV',      plural: 'TV',       spine: 'TV' },
+  movie:   { label: 'Movie',   plural: 'Movies',   spine: 'MV' },
+  article: { label: 'Article', plural: 'Articles', spine: 'AR' },
+  video:   { label: 'Video',   plural: 'Videos',   spine: 'VD' },
 }
 
-export const TYPE_ORDER = ['book', 'tv', 'movie', 'article', 'video', 'restaurant']
+export const TYPE_ORDER = ['book', 'tv', 'movie', 'article', 'video']
 
 // Defensive lookup — unknown types fall back to a neutral placeholder so the
 // renderer never throws on legacy data with surprise type values.

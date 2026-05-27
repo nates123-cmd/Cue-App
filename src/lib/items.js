@@ -1,11 +1,11 @@
 // Cue's data layer over Ink's existing tables.
 //
-// Cue's library = union of three sources:
-//   1. `recommendations`  — the queue + finished items Cue has added (writable)
-//   2. `media_entries`    — Ink's consumption log, surfaced for titles NOT in
-//                           recommendations (so already-consumed items show)
-//   3. `restaurant_visits` — grouped one-per-place, with visit log on detail
+// Cue's library = union of two sources:
+//   1. `recommendations` — the queue + finished items Cue has added (writable)
+//   2. `media_entries`   — Ink's consumption log, surfaced for titles NOT in
+//                          recommendations (so already-consumed items show)
 //
+// Restaurants moved to Ink as of 2026-05-27 — Cue is media-only.
 // All Cue mutations write to `recommendations`. On finish, Cue ALSO inserts a
 // `media_entries` row so Ink's surfaces stay coherent.
 //
@@ -15,12 +15,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
-// Normalize legacy values to Cue's six types. Unknown types collapse to
+// Normalize legacy values to Cue's five types. Unknown types collapse to
 // 'article' (most generic — text-cover renderer, no type-specific extension).
+// Legacy 'restaurant' rows also collapse to 'article' so they don't crash the
+// renderer (they're still in the DB but no longer surfaced as their own type).
 function normalizeType(t) {
   if (!t) return 'article'
   if (t === 'film') return 'movie'
-  if (['book', 'tv', 'movie', 'article', 'video', 'restaurant'].includes(t)) return t
+  if (['book', 'tv', 'movie', 'article', 'video'].includes(t)) return t
   return 'article'
 }
 
@@ -70,7 +72,6 @@ function recToItem(r) {
 }
 
 function defaultCoverKind(type) {
-  if (type === 'restaurant') return 'venue'
   if (type === 'video') return 'thumb'
   if (type === 'movie' || type === 'tv') return 'poster'
   return 'type'
@@ -103,48 +104,6 @@ function mediaToItem(m) {
   }
 }
 
-// restaurant_visits grouped by place_name → one Cue item with visit summary
-function visitGroupToItem(rows) {
-  const sorted = [...rows].sort((a, b) =>
-    (b.visit_date || '').localeCompare(a.visit_date || ''))
-  const latest = sorted[0]
-  const wouldReturnSomeVisit = rows.some((r) => r.would_return === true)
-  return {
-    id: `visits:${latest.id}`,
-    _source: 'visits',
-    _visit_ids: rows.map((r) => r.id),
-    title: latest.place_name,
-    type: 'restaurant',
-    status: 'done',
-    recommended_by: 'me',
-    tags: wouldReturnSomeVisit ? ['would-return'] : [],
-    with: latest.with_people || [],
-    rating: null,
-    notes: latest.note || null,
-    enrichment: {
-      synopsis: rows.length > 1
-        ? `${rows.length} visits, most recent ${latest.visit_date || 'unknown'}.`
-        : `Visited ${latest.visit_date || ''}.`.trim(),
-    },
-    links: [],
-    extension: {
-      visits: rows.length,
-      last_visit: latest.visit_date,
-      dishes: Array.from(new Set(rows.flatMap((r) => r.dishes || []))),
-      visit_log: sorted.map((v) => ({
-        id: v.id, visit_date: v.visit_date, dishes: v.dishes || [],
-        with_people: v.with_people || [], note: v.note, would_return: v.would_return,
-      })),
-    },
-    image_url: null,
-    image_tone: null,
-    cover_kind: 'venue',
-    created_at: latest.created_at,
-    started_at: null,
-    finished_at: latest.visit_date ? `${latest.visit_date}T19:00:00Z` : latest.created_at,
-  }
-}
-
 export function useItems() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -153,21 +112,24 @@ export function useItems() {
   const reload = useCallback(async () => {
     setLoading(true)
     try {
-      const [recsRes, mediaRes, visitsRes] = await Promise.all([
+      const [recsRes, mediaRes] = await Promise.all([
         supabase.from('recommendations').select('*'),
         supabase.from('media_entries').select('*'),
-        supabase.from('restaurant_visits').select('*'),
       ])
       if (recsRes.error) throw recsRes.error
       if (mediaRes.error) throw mediaRes.error
-      if (visitsRes.error) throw visitsRes.error
 
-      const recs = (recsRes.data || []).map(recToItem)
+      // Restaurants belong to Ink — hide any legacy restaurant rows from Cue's
+      // surfaces. The data stays in Supabase; it's just not Cue's UI anymore.
+      const recRows = (recsRes.data || []).filter((r) => r.media_type !== 'restaurant')
+      const mediaRows = (mediaRes.data || []).filter((m) => m.format !== 'restaurant')
+
+      const recs = recRows.map(recToItem)
       const recTitles = new Set(recs.map((r) => r.title.toLowerCase().trim()))
 
       // Attach latest media_entry rating/note to matching rec
       const mediaByTitle = new Map()
-      for (const m of mediaRes.data || []) {
+      for (const m of mediaRows) {
         const key = (m.title || '').toLowerCase().trim()
         const prev = mediaByTitle.get(key)
         if (!prev || (m.consumed_date || '') > (prev.consumed_date || '')) {
@@ -187,35 +149,11 @@ export function useItems() {
       }
 
       // media_entries without matching rec → read-only done items
-      const orphanMedia = (mediaRes.data || [])
+      const orphanMedia = mediaRows
         .filter((m) => !recTitles.has((m.title || '').toLowerCase().trim()))
         .map(mediaToItem)
 
-      // restaurant_visits grouped by place_name
-      const visitsByPlace = new Map()
-      for (const v of visitsRes.data || []) {
-        const key = (v.place_name || '').toLowerCase().trim()
-        if (!key) continue
-        if (!visitsByPlace.has(key)) visitsByPlace.set(key, [])
-        visitsByPlace.get(key).push(v)
-      }
-      const visitItems = []
-      for (const [key, rows] of visitsByPlace) {
-        // If a rec for this restaurant already exists, attach visit info to it instead
-        const existingRec = recs.find((r) =>
-          r.type === 'restaurant' && r.title.toLowerCase().trim() === key)
-        if (existingRec) {
-          const grouped = visitGroupToItem(rows)
-          existingRec.extension = { ...existingRec.extension, ...grouped.extension }
-          existingRec.status = 'done'
-          if (!existingRec.finished_at) existingRec.finished_at = grouped.finished_at
-          existingRec._visit_ids = grouped._visit_ids
-        } else {
-          visitItems.push(visitGroupToItem(rows))
-        }
-      }
-
-      const all = [...recs, ...orphanMedia, ...visitItems]
+      const all = [...recs, ...orphanMedia]
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
       setItems(all)
       setError(null)
@@ -266,8 +204,7 @@ export function useItems() {
   }, [reload])
 
   // Mark done = update recommendations (rating/notes/finished_at) + insert a
-  // media_entries row so Ink's log stays coherent. For restaurants, insert a
-  // restaurant_visits row instead.
+  // media_entries row so Ink's log stays coherent.
   const finishItem = useCallback(async (item, { rating = null, note = null } = {}) => {
     const finished_at = new Date().toISOString()
     setItems((prev) => prev.map((i) => i.id === item.id
@@ -284,41 +221,14 @@ export function useItems() {
       const recRes = await supabase.from('recommendations').update(upd).eq('id', item.id)
       if (recRes.error) { await reload(); throw recRes.error }
     }
-    if (item.type === 'restaurant') {
-      const v = await supabase.from('restaurant_visits').insert({
-        place_name: item.title,
-        visit_date: finished_at.slice(0, 10),
-        with_people: item.with || [],
-        note: note || null,
-      })
-      if (v.error) console.warn('restaurant_visits insert failed', v.error)
-    } else {
-      const m = await supabase.from('media_entries').insert({
-        title: item.title,
-        format: item.type === 'movie' ? 'film' : item.type,
-        consumed_date: finished_at.slice(0, 10),
-        rating,
-        note,
-      })
-      if (m.error) console.warn('media_entries insert failed', m.error)
-    }
-  }, [reload])
-
-  // Log another visit to a restaurant. Inserts a restaurant_visits row and
-  // refreshes — the grouped extension.visit_log will pick it up on reload.
-  const logVisit = useCallback(async (item, {
-    visit_date = null, dishes = [], with_people = [], note = null, would_return = null,
-  } = {}) => {
-    const { error } = await supabase.from('restaurant_visits').insert({
-      place_name: item.title,
-      visit_date: visit_date || new Date().toISOString().slice(0, 10),
-      dishes,
-      with_people,
+    const m = await supabase.from('media_entries').insert({
+      title: item.title,
+      format: item.type === 'movie' ? 'film' : item.type,
+      consumed_date: finished_at.slice(0, 10),
+      rating,
       note,
-      would_return,
     })
-    if (error) throw error
-    await reload()
+    if (m.error) console.warn('media_entries insert failed', m.error)
   }, [reload])
 
   const deleteItem = useCallback(async (id) => {
@@ -331,9 +241,6 @@ export function useItems() {
     } else if (item._source === 'media') {
       const { error } = await supabase.from('media_entries').delete().eq('id', item._media_id)
       if (error) { await reload(); throw error }
-    } else if (item._source === 'visits' && item._visit_ids?.length) {
-      const { error } = await supabase.from('restaurant_visits').delete().in('id', item._visit_ids)
-      if (error) { await reload(); throw error }
     }
   }, [reload])
 
@@ -341,7 +248,7 @@ export function useItems() {
   const itemsRef = useRef(items)
   itemsRef.current = items
 
-  return { items, loading, error, addItem, updateItem, deleteItem, finishItem, logVisit, reload }
+  return { items, loading, error, addItem, updateItem, deleteItem, finishItem, reload }
 }
 
 function patchToDb(patch) {

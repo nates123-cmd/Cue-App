@@ -1,6 +1,5 @@
 // Detail sheet for any item. Override-always-wins: title, synopsis, notes,
-// rating, recommended_by, tags, status are all editable here. For restaurants
-// the visit log + "log another visit" action appear below.
+// rating, recommended_by, tags, status are all editable here.
 
 import { useState } from 'react'
 import {
@@ -103,64 +102,9 @@ const TagEditor = ({ tags = [], onChange }) => {
   )
 }
 
-const VisitLog = ({ item, onLogVisit }) => {
-  const visits = item.extension?.visit_log || []
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-        <Mono size={9} dim>Visit log {visits.length > 0 && `· ${visits.length}`}</Mono>
-        <button onClick={() => onLogVisit && onLogVisit(item)} style={{ ...btnGhost, padding: '4px 9px', fontSize: 9 }}>+ Log visit</button>
-      </div>
-      {visits.length === 0 ? (
-        <div style={{
-          padding: '12px 14px', border: '1px dashed var(--hairline-strong)', borderRadius: 3,
-          color: 'var(--muted)', fontFamily: 'var(--body)', fontSize: 12.5,
-        }}>No visits yet. Tap above when you go.</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {visits.map((v) => (
-            <div key={v.id} style={{
-              padding: '10px 12px',
-              border: '1px solid var(--hairline)', borderRadius: 3,
-              background: 'color-mix(in oklab, var(--paper) 50%, transparent)',
-              display: 'flex', flexDirection: 'column', gap: 5,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                <Mono size={10}>{v.visit_date || '—'}</Mono>
-                {v.would_return === true && (
-                  <Mono size={9} style={{ color: 'var(--signal)' }}>would return</Mono>
-                )}
-                {v.would_return === false && (
-                  <Mono size={9} dim>wouldn't</Mono>
-                )}
-                {v.with_people?.length > 0 && (
-                  <>
-                    <span style={{ width: 1, height: 8, background: 'var(--hairline-strong)' }} />
-                    <Mono size={9} dim>with {v.with_people.join(', ')}</Mono>
-                  </>
-                )}
-              </div>
-              {v.dishes?.length > 0 && (
-                <div style={{ fontFamily: 'var(--body)', fontSize: 12, color: 'var(--text-soft)', fontStyle: 'italic' }}>
-                  {v.dishes.join(' · ')}
-                </div>
-              )}
-              {v.note && (
-                <div style={{ fontFamily: 'var(--body)', fontSize: 13, color: 'var(--text)', lineHeight: 1.45 }}>
-                  {v.note}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export const ItemDetail = ({
   item, onClose, onChangeStatus, onToggleWith,
-  onPatch, onLogVisit, onRequestFinish, onPromoteToLibrary,
+  onPatch, onRequestFinish, onPromoteToLibrary,
   partner = 'Amanda', recommenders = [],
 }) => {
   if (!item) return null
@@ -172,7 +116,6 @@ export const ItemDetail = ({
   if (item.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (item.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (item.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
-  if (item.type === 'restaurant') meta.push(ext.neighborhood, ext.cuisine, ext.price_level && '$'.repeat(ext.price_level))
   if (ext.genre) meta.push(ext.genre)
 
   const setRating = (n) => {
@@ -372,10 +315,6 @@ export const ItemDetail = ({
             </div>
           </div>
 
-          {/* Visit log — restaurants only */}
-          {item.type === 'restaurant' && (
-            <VisitLog item={item} onLogVisit={onLogVisit} />
-          )}
 
           {item.links?.length > 0 && (
             <div>

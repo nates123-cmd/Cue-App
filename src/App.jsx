@@ -7,7 +7,6 @@ import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CueBar } from './components/CueBar'
 import { FinishSheet } from './components/FinishSheet'
-import { VisitSheet } from './components/VisitSheet'
 import { CapturePage } from './pages/Capture'
 import { LibraryPage } from './pages/Library'
 import { ActivePage } from './pages/Active'
@@ -19,10 +18,9 @@ export default function App() {
   const [density, setDensity] = useState('grid')
   const [now, setNow] = useState(() => new Date())
   const [finishTarget, setFinishTarget] = useState(null) // item awaiting rating+notes
-  const [visitTarget, setVisitTarget] = useState(null) // restaurant awaiting visit details
 
   const {
-    items, loading, addItem, updateItem, deleteItem, finishItem, logVisit, reload,
+    items, loading, addItem, updateItem, deleteItem, finishItem, reload,
   } = useItems()
 
   useEffect(() => {
@@ -82,12 +80,7 @@ export default function App() {
     await updateItem(item.id, { extension: ext })
   }
 
-  // Restaurants get the richer VisitSheet (date/dishes/with/would-return);
-  // everything else gets the rating+note FinishSheet.
-  const onRequestFinish = (item) => {
-    if (item.type === 'restaurant') setVisitTarget(item)
-    else setFinishTarget(item)
-  }
+  const onRequestFinish = (item) => setFinishTarget(item)
 
   const onConfirmFinish = async ({ rating, note, share_to_ink }) => {
     if (!finishTarget) return
@@ -130,26 +123,6 @@ export default function App() {
     setOpenItem((prev) => (prev && prev.id === item.id ? { ...prev, ...patch } : prev))
   }
 
-  const onRequestLogVisit = (item) => setVisitTarget(item)
-
-  const onConfirmLogVisit = async (fields) => {
-    if (!visitTarget) return
-    const target = visitTarget
-    setVisitTarget(null)
-    await logVisit(target, fields)
-    // Logging a visit is the "I've been here" event — flip rec to done if not already.
-    if (target._source === 'rec' && target.status !== 'done') {
-      try { await updateItem(target.id, { status: 'done', finished_at: new Date().toISOString() }) }
-      catch (e) { console.warn('mark restaurant done failed', e) }
-    }
-    if (fields.share_to_ink && fields.note) {
-      await shareReflectionToInk({ title: target.title, type: 'restaurant', note: fields.note })
-    }
-    // The grouped visit_log lives on items.extension, which is rebuilt on reload.
-    // Close the detail sheet so the new visit appears when reopened.
-    setOpenItem(null)
-  }
-
   // Promote a read-only media_entries-derived item into a real library row.
   // We insert a matching recommendations row with status='done' so reload's
   // title-match merges the existing media rating/note onto it.
@@ -167,12 +140,11 @@ export default function App() {
   }
 
   // Cross-suite hook: write a reflection note into Ink's `entries` table.
-  // primary_type follows Ink's conventions: 'restaurant' or 'media' (book/tv/movie/article/video).
-  const shareReflectionToInk = async ({ title, type, note }) => {
-    const primary_type = type === 'restaurant' ? 'restaurant' : 'media'
+  // Cue is media-only as of 2026-05-27, so primary_type is always 'media'.
+  const shareReflectionToInk = async ({ title, note }) => {
     const raw_text = `${title} — ${note}`
     const { error } = await supabase.from('entries').insert({
-      raw_text, primary_type, source_surface: 'cue_finish',
+      raw_text, primary_type: 'media', source_surface: 'cue_finish',
     })
     if (error) console.warn('entries insert failed', error)
   }
@@ -249,7 +221,7 @@ export default function App() {
 
         <BottomNav page={page} onChange={setPage} activeCount={activeCount} />
 
-        {!cueBarOpen && !openItem && !finishTarget && !visitTarget && (
+        {!cueBarOpen && !openItem && !finishTarget && (
           <button onClick={() => setCueBarOpen(true)} style={{
             position: 'fixed', bottom: 'calc(92px + env(safe-area-inset-bottom, 0px))', right: 16, zIndex: 35,
             appearance: 'none', cursor: 'pointer',
@@ -270,7 +242,6 @@ export default function App() {
             onChangeStatus={onChangeStatus}
             onToggleWith={onToggleWith}
             onPatch={onPatchItem}
-            onLogVisit={onRequestLogVisit}
             onRequestFinish={onRequestFinish}
             onPromoteToLibrary={onPromoteToLibrary}
             partner={PARTNER}
@@ -295,14 +266,6 @@ export default function App() {
           item={finishTarget}
           onClose={() => setFinishTarget(null)}
           onConfirm={onConfirmFinish}
-        />
-
-        <VisitSheet
-          open={!!visitTarget}
-          item={visitTarget}
-          onClose={() => setVisitTarget(null)}
-          onConfirm={onConfirmLogVisit}
-          partner={PARTNER}
         />
 
         <button onClick={signOut} title="Sign out" style={{

@@ -18,8 +18,7 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
 
   if (!open || !item) return null
 
-  const isRestaurant = item.type === 'restaurant'
-  const verb = isRestaurant ? 'Mark as been' : 'Mark as done'
+  const verb = 'Mark as done'
   const tone = (n) =>
     n === 3 ? 'loved it' : n === 2 ? 'good, glad I did' : n === 1 ? 'meh' : 'tap a dot'
 
@@ -66,11 +65,11 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <Mono size={9} dim>{isRestaurant ? 'Notes — what you ordered, vibe' : 'Notes (optional)'}</Mono>
+          <Mono size={9} dim>Notes (optional)</Mono>
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder={isRestaurant ? 'steak frites, perfect on a rainy night…' : 'a sentence on what stayed with you'}
+            placeholder="a sentence on what stayed with you"
             rows={3}
             style={{
               appearance: 'none', outline: 0, resize: 'vertical',

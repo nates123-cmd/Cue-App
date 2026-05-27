@@ -228,46 +228,7 @@ const VideoCover = ({ item }) => {
   )
 }
 
-const VenueCover = ({ item }) => {
-  const [bg, fg] = item.image_tone || ['#1a2a2e', '#3a7a8a']
-  const t = metaFor(item.type)
-  const ext = item.extension || {}
-  return (
-    <div style={{ width: '100%', height: '100%', position: 'relative', background: bg, color: '#f0e9dd', overflow: 'hidden' }}>
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: `repeating-linear-gradient(45deg, transparent 0, transparent 16px, ${fg}1a 16px, ${fg}1a 17px)`,
-      }} />
-      <div style={{
-        position: 'absolute', inset: 0,
-        background: `radial-gradient(ellipse at 60% 30%, ${fg}30, transparent 60%)`,
-      }} />
-      <div style={{ position: 'absolute', inset: 0, padding: '14px', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Mono size={9} style={{ color: fg }}>{t.spine}</Mono>
-          <Mono size={9} style={{ color: fg, opacity: 0.7 }}>
-            {ext.price_level ? '$'.repeat(ext.price_level) : ''}
-          </Mono>
-        </div>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
-          <div style={{
-            fontFamily: 'var(--display)', fontStyle: 'italic',
-            fontSize: 'clamp(20px, 2.4cqi, 30px)',
-            lineHeight: 1.0, letterSpacing: '-0.01em', textWrap: 'balance',
-          }}>{item.title}</div>
-        </div>
-        <div>
-          <Mono size={9} style={{ color: fg, opacity: 0.9 }}>
-            {[ext.neighborhood, ext.cuisine].filter(Boolean).join(' · ')}
-          </Mono>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export const Cover = ({ item }) => {
-  if (item.cover_kind === 'venue') return <VenueCover item={item} />
   if (item.cover_kind === 'thumb') return <VideoCover item={item} />
   if (item.cover_kind === 'poster') return <StripedCover item={item} />
   return <TypeCover item={item} />
@@ -464,8 +425,8 @@ export const Card = ({ item, onClick }) => {
   )
 }
 
-// Movies/articles/videos/restaurants don't track incremental progress —
-// "Bump" was a no-op for them. They get a Finish-only footer instead.
+// Movies/articles/videos don't track incremental progress — "Bump" was a no-op
+// for them. They get a Finish-only footer instead.
 const hasIncrementalProgress = (type) => type === 'book' || type === 'tv'
 
 const shortAgo = (iso) => {
@@ -556,9 +517,7 @@ export const ProgressCard = ({ item, onBump, onFinish }) => {
               <button
                 onClick={(e) => { e.stopPropagation(); onFinish && onFinish(item) }}
                 style={{ ...btnPrimary, marginTop: 4, width: '100%' }}
-              >
-                {item.type === 'restaurant' ? 'Been there' : 'Finish'}
-              </button>
+              >Finish</button>
             </>
           )}
         </div>
