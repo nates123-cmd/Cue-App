@@ -1,0 +1,384 @@
+// Cue's data layer over Ink's existing tables.
+//
+// Cue's library = union of three sources:
+//   1. `recommendations`  — the queue + finished items Cue has added (writable)
+//   2. `media_entries`    — Ink's consumption log, surfaced for titles NOT in
+//                           recommendations (so already-consumed items show)
+//   3. `restaurant_visits` — grouped one-per-place, with visit log on detail
+//
+// All Cue mutations write to `recommendations`. On finish, Cue ALSO inserts a
+// `media_entries` row so Ink's surfaces stay coherent.
+//
+// Status mapping: 'saved' (Ink's only value) reads as 'queued'. New Cue rows
+// use 'queued'/'active'/'done'.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { supabase } from './supabase'
+
+// Normalize legacy values to Cue's six types. Unknown types collapse to
+// 'article' (most generic — text-cover renderer, no type-specific extension).
+function normalizeType(t) {
+  if (!t) return 'article'
+  if (t === 'film') return 'movie'
+  if (['book', 'tv', 'movie', 'article', 'video', 'restaurant'].includes(t)) return t
+  return 'article'
+}
+
+function normalizeStatus(s, finishedAt) {
+  if (finishedAt) return 'done'
+  if (s === 'done' || s === 'finished') return 'done'
+  if (s === 'active') return 'active'
+  return 'queued' // 'saved' or null → queued
+}
+
+// recommendations row → Cue item shape
+function recToItem(r) {
+  const ext = { ...(r.extension || {}) }
+  // Surface legacy creator/year into the extension under type-aware keys.
+  if (r.creator) {
+    if (r.media_type === 'book' || r.media_type === 'article') ext.author = ext.author || r.creator
+    else if (r.media_type === 'movie' || r.media_type === 'film') ext.director = ext.director || r.creator
+    else if (r.media_type === 'video') ext.channel = ext.channel || r.creator
+    else if (r.media_type === 'tv') ext.network_or_service = ext.network_or_service || r.creator
+  }
+  if (r.year) {
+    if (r.media_type === 'book' || r.media_type === 'article') ext.published_year = ext.published_year || r.year
+    else if (r.media_type === 'movie' || r.media_type === 'film') ext.release_year = ext.release_year || r.year
+  }
+  const type = normalizeType(r.media_type)
+  return {
+    id: r.id,
+    _source: 'rec',
+    title: r.title,
+    type,
+    status: normalizeStatus(r.status, r.finished_at || r.consumed_at),
+    recommended_by: r.recommended_by || 'me',
+    tags: r.tags || [],
+    with: r.with || [],
+    rating: r.rating ?? null, // falls back to latest media_entry by title
+    notes: r.notes ?? null,
+    enrichment: { synopsis: r.summary || '' },
+    links: Array.isArray(r.where_to_find) ? r.where_to_find : [],
+    extension: ext,
+    image_url: null,
+    image_tone: r.image_tone,
+    cover_kind: r.cover_kind || defaultCoverKind(type),
+    created_at: r.created_at,
+    started_at: r.started_at,
+    finished_at: r.finished_at || r.consumed_at,
+  }
+}
+
+function defaultCoverKind(type) {
+  if (type === 'restaurant') return 'venue'
+  if (type === 'video') return 'thumb'
+  if (type === 'movie' || type === 'tv') return 'poster'
+  return 'type'
+}
+
+// media_entries row (without matching rec) → read-only Cue item
+function mediaToItem(m) {
+  const type = normalizeType(m.format)
+  return {
+    id: `media:${m.id}`,
+    _source: 'media',
+    _media_id: m.id,
+    title: m.title,
+    type,
+    status: 'done',
+    recommended_by: 'me',
+    tags: [],
+    with: [],
+    rating: m.rating || null,
+    notes: m.note || null,
+    enrichment: { synopsis: '' },
+    links: [],
+    extension: {},
+    image_url: null,
+    image_tone: null,
+    cover_kind: defaultCoverKind(type),
+    created_at: m.created_at,
+    started_at: null,
+    finished_at: m.consumed_date ? `${m.consumed_date}T12:00:00Z` : m.created_at,
+  }
+}
+
+// restaurant_visits grouped by place_name → one Cue item with visit summary
+function visitGroupToItem(rows) {
+  const sorted = [...rows].sort((a, b) =>
+    (b.visit_date || '').localeCompare(a.visit_date || ''))
+  const latest = sorted[0]
+  const wouldReturnSomeVisit = rows.some((r) => r.would_return === true)
+  return {
+    id: `visits:${latest.id}`,
+    _source: 'visits',
+    _visit_ids: rows.map((r) => r.id),
+    title: latest.place_name,
+    type: 'restaurant',
+    status: 'done',
+    recommended_by: 'me',
+    tags: wouldReturnSomeVisit ? ['would-return'] : [],
+    with: latest.with_people || [],
+    rating: null,
+    notes: latest.note || null,
+    enrichment: {
+      synopsis: rows.length > 1
+        ? `${rows.length} visits, most recent ${latest.visit_date || 'unknown'}.`
+        : `Visited ${latest.visit_date || ''}.`.trim(),
+    },
+    links: [],
+    extension: {
+      visits: rows.length,
+      last_visit: latest.visit_date,
+      dishes: Array.from(new Set(rows.flatMap((r) => r.dishes || []))),
+      visit_log: sorted.map((v) => ({
+        id: v.id, visit_date: v.visit_date, dishes: v.dishes || [],
+        with_people: v.with_people || [], note: v.note, would_return: v.would_return,
+      })),
+    },
+    image_url: null,
+    image_tone: null,
+    cover_kind: 'venue',
+    created_at: latest.created_at,
+    started_at: null,
+    finished_at: latest.visit_date ? `${latest.visit_date}T19:00:00Z` : latest.created_at,
+  }
+}
+
+export function useItems() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [recsRes, mediaRes, visitsRes] = await Promise.all([
+        supabase.from('recommendations').select('*'),
+        supabase.from('media_entries').select('*'),
+        supabase.from('restaurant_visits').select('*'),
+      ])
+      if (recsRes.error) throw recsRes.error
+      if (mediaRes.error) throw mediaRes.error
+      if (visitsRes.error) throw visitsRes.error
+
+      const recs = (recsRes.data || []).map(recToItem)
+      const recTitles = new Set(recs.map((r) => r.title.toLowerCase().trim()))
+
+      // Attach latest media_entry rating/note to matching rec
+      const mediaByTitle = new Map()
+      for (const m of mediaRes.data || []) {
+        const key = (m.title || '').toLowerCase().trim()
+        const prev = mediaByTitle.get(key)
+        if (!prev || (m.consumed_date || '') > (prev.consumed_date || '')) {
+          mediaByTitle.set(key, m)
+        }
+      }
+      for (const r of recs) {
+        const m = mediaByTitle.get(r.title.toLowerCase().trim())
+        if (m) {
+          if (m.rating != null) r.rating = m.rating
+          if (m.note) r.notes = m.note
+          if (!r.finished_at && m.consumed_date) {
+            r.finished_at = `${m.consumed_date}T12:00:00Z`
+            r.status = 'done'
+          }
+        }
+      }
+
+      // media_entries without matching rec → read-only done items
+      const orphanMedia = (mediaRes.data || [])
+        .filter((m) => !recTitles.has((m.title || '').toLowerCase().trim()))
+        .map(mediaToItem)
+
+      // restaurant_visits grouped by place_name
+      const visitsByPlace = new Map()
+      for (const v of visitsRes.data || []) {
+        const key = (v.place_name || '').toLowerCase().trim()
+        if (!key) continue
+        if (!visitsByPlace.has(key)) visitsByPlace.set(key, [])
+        visitsByPlace.get(key).push(v)
+      }
+      const visitItems = []
+      for (const [key, rows] of visitsByPlace) {
+        // If a rec for this restaurant already exists, attach visit info to it instead
+        const existingRec = recs.find((r) =>
+          r.type === 'restaurant' && r.title.toLowerCase().trim() === key)
+        if (existingRec) {
+          const grouped = visitGroupToItem(rows)
+          existingRec.extension = { ...existingRec.extension, ...grouped.extension }
+          existingRec.status = 'done'
+          if (!existingRec.finished_at) existingRec.finished_at = grouped.finished_at
+          existingRec._visit_ids = grouped._visit_ids
+        } else {
+          visitItems.push(visitGroupToItem(rows))
+        }
+      }
+
+      const all = [...recs, ...orphanMedia, ...visitItems]
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+      setItems(all)
+      setError(null)
+    } catch (e) {
+      setError(e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { reload() }, [reload])
+
+  // All adds go into recommendations.
+  const addItem = useCallback(async (draft) => {
+    const row = {
+      title: draft.title,
+      media_type: draft.type,
+      status: draft.status === 'done' ? 'done' : 'queued',
+      summary: draft.enrichment?.synopsis || null,
+      where_to_find: draft.links || [],
+      tags: draft.tags || [],
+      recommended_by: draft.recommended_by || 'me',
+      with: draft.with || [],
+      extension: draft.extension || {},
+      cover_kind: draft.cover_kind || defaultCoverKind(draft.type),
+      image_tone: draft.image_tone || null,
+      // surface a couple of legacy columns Ink reads so its UI stays coherent
+      creator: deriveCreator(draft),
+      year: deriveYear(draft),
+    }
+    const { data, error } = await supabase
+      .from('recommendations').insert(row).select('*').single()
+    if (error) throw error
+    const item = recToItem(data)
+    setItems((prev) => [item, ...prev])
+    return item
+  }, [])
+
+  const updateItem = useCallback(async (id, patch) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+    const item = itemsRef.current.find((i) => i.id === id)
+    if (!item || item._source !== 'rec') return // media/visit items are read-only here
+    const dbPatch = patchToDb(patch)
+    if (Object.keys(dbPatch).length === 0) return
+    const { error } = await supabase
+      .from('recommendations').update(dbPatch).eq('id', id)
+    if (error) { await reload(); throw error }
+  }, [reload])
+
+  // Mark done = update recommendations (rating/notes/finished_at) + insert a
+  // media_entries row so Ink's log stays coherent. For restaurants, insert a
+  // restaurant_visits row instead.
+  const finishItem = useCallback(async (item, { rating = null, note = null } = {}) => {
+    const finished_at = new Date().toISOString()
+    setItems((prev) => prev.map((i) => i.id === item.id
+      ? { ...i, status: 'done', finished_at, rating: rating ?? i.rating, notes: note ?? i.notes }
+      : i))
+    if (item._source === 'rec') {
+      const upd = {
+        status: 'done',
+        finished_at,
+        consumed_at: finished_at,
+        rating: rating ?? item.rating ?? null,
+        notes: note ?? item.notes ?? null,
+      }
+      const recRes = await supabase.from('recommendations').update(upd).eq('id', item.id)
+      if (recRes.error) { await reload(); throw recRes.error }
+    }
+    if (item.type === 'restaurant') {
+      const v = await supabase.from('restaurant_visits').insert({
+        place_name: item.title,
+        visit_date: finished_at.slice(0, 10),
+        with_people: item.with || [],
+        note: note || null,
+      })
+      if (v.error) console.warn('restaurant_visits insert failed', v.error)
+    } else {
+      const m = await supabase.from('media_entries').insert({
+        title: item.title,
+        format: item.type === 'movie' ? 'film' : item.type,
+        consumed_date: finished_at.slice(0, 10),
+        rating,
+        note,
+      })
+      if (m.error) console.warn('media_entries insert failed', m.error)
+    }
+  }, [reload])
+
+  // Log another visit to a restaurant. Inserts a restaurant_visits row and
+  // refreshes — the grouped extension.visit_log will pick it up on reload.
+  const logVisit = useCallback(async (item, {
+    visit_date = null, dishes = [], with_people = [], note = null, would_return = null,
+  } = {}) => {
+    const { error } = await supabase.from('restaurant_visits').insert({
+      place_name: item.title,
+      visit_date: visit_date || new Date().toISOString().slice(0, 10),
+      dishes,
+      with_people,
+      note,
+      would_return,
+    })
+    if (error) throw error
+    await reload()
+  }, [reload])
+
+  const deleteItem = useCallback(async (id) => {
+    const item = itemsRef.current.find((i) => i.id === id)
+    setItems((prev) => prev.filter((i) => i.id !== id))
+    if (!item) return
+    if (item._source === 'rec') {
+      const { error } = await supabase.from('recommendations').delete().eq('id', id)
+      if (error) { await reload(); throw error }
+    } else if (item._source === 'media') {
+      const { error } = await supabase.from('media_entries').delete().eq('id', item._media_id)
+      if (error) { await reload(); throw error }
+    } else if (item._source === 'visits' && item._visit_ids?.length) {
+      const { error } = await supabase.from('restaurant_visits').delete().in('id', item._visit_ids)
+      if (error) { await reload(); throw error }
+    }
+  }, [reload])
+
+  // Keep a ref to items so mutation handlers can resolve _source without re-deriving
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+
+  return { items, loading, error, addItem, updateItem, deleteItem, finishItem, logVisit, reload }
+}
+
+function patchToDb(patch) {
+  const map = {
+    status: 'status',
+    recommended_by: 'recommended_by',
+    tags: 'tags',
+    with: 'with',
+    started_at: 'started_at',
+    finished_at: 'finished_at',
+    extension: 'extension',
+    notes: 'notes',
+    rating: 'rating',
+    image_tone: 'image_tone',
+    cover_kind: 'cover_kind',
+    title: 'title',
+  }
+  // Map nested enrichment.synopsis → recommendations.summary, if present.
+  const out = {}
+  for (const [k, v] of Object.entries(patch)) {
+    if (k === 'enrichment' && v && typeof v === 'object' && 'synopsis' in v) {
+      out.summary = v.synopsis || null
+      continue
+    }
+    const col = map[k]
+    if (col === undefined || col === null) continue
+    out[col] = v
+  }
+  return out
+}
+
+function deriveCreator(draft) {
+  const e = draft.extension || {}
+  return e.author || e.director || e.channel || e.network_or_service || null
+}
+
+function deriveYear(draft) {
+  const e = draft.extension || {}
+  return e.published_year || e.release_year || null
+}

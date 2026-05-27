@@ -1,0 +1,132 @@
+/* Cue — base styles, auth shell, design tokens. The runtime app shell sets
+   theme tokens (--ink, --paper, --signal, etc) on its root div based on
+   edition + theme override, so styles inside the app are mostly inline.
+   These :root tokens are the dark-default fallback used by the auth gate
+   and any pre-mount paint. */
+
+:root {
+  --signal: #ec5a2a;
+  --ink: #15120f;
+  --paper: #1c1916;
+  --paper-soft: #23201c;
+  --text: #f0e8d8;
+  --text-soft: #cdc3b1;
+  --muted: #8a8275;
+  --hairline: rgba(240, 232, 216, 0.08);
+  --hairline-strong: rgba(240, 232, 216, 0.22);
+  --display: 'Instrument Serif', Georgia, serif;
+  --body: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --bg-canvas: var(--ink);
+  --bg-surface: var(--paper);
+  --divider: var(--hairline);
+  --ink-primary: var(--text);
+  --ink-secondary: var(--text-soft);
+  --ink-tertiary: var(--muted);
+  --accent: var(--signal);
+  --accent-soft: rgba(236, 90, 42, 0.18);
+  --font-display: var(--display);
+  --font-body: var(--body);
+  --font-mono: var(--mono);
+}
+
+* { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100svh;
+  background: var(--bg-canvas);
+  color: var(--ink-primary);
+  font-family: var(--body);
+  overflow-x: hidden;
+}
+
+button { font-family: inherit; cursor: pointer; }
+input { font-family: inherit; }
+
+::-webkit-scrollbar { width: 0; height: 0; }
+
+@keyframes field-in {
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-now {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+@keyframes shimmer {
+  0% { background-position: 200% 50%; }
+  100% { background-position: -200% 50%; }
+}
+@keyframes sheet-in {
+  from { transform: translateY(30px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Auth gate ───────────────────────────────────────────── */
+.auth-shell {
+  min-height: 100svh;
+  width: 100vw;
+  background: var(--bg-canvas);
+  color: var(--ink-primary);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  font-family: var(--font-body);
+}
+.auth-card {
+  width: 100%; max-width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--divider);
+  border-radius: 20px;
+  padding: 32px 28px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.auth-eyebrow {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.auth-title {
+  font-family: var(--font-display); font-weight: 400;
+  font-size: 32px; letter-spacing: -0.02em; font-style: italic;
+  margin: 0;
+}
+.auth-form { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.auth-label {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.auth-input {
+  appearance: none; outline: none;
+  padding: 12px 14px; border-radius: 8px;
+  background: rgba(240, 232, 216, 0.04);
+  border: 1px solid var(--hairline-strong);
+  color: var(--ink-primary); font-size: 16px;
+}
+.auth-input:focus { border-color: var(--accent); }
+.auth-btn {
+  appearance: none; cursor: pointer;
+  padding: 12px 14px; border-radius: 8px;
+  background: var(--accent); color: var(--ink);
+  border: 0; font-family: var(--font-mono); font-weight: 600;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.auth-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.auth-btn-link {
+  appearance: none; cursor: pointer;
+  background: transparent; border: 0;
+  color: var(--ink-tertiary); font-family: var(--font-mono);
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 4px 0; margin-top: 4px; text-align: center;
+}
+.auth-error {
+  color: #d05a3a; font-size: 13px;
+  font-family: var(--font-body);
+}
+.auth-hint {
+  margin: 0; color: var(--ink-secondary);
+  font-size: 14px; line-height: 1.5;
+}
