@@ -6,6 +6,8 @@ import { claudeComplete, extractJSON } from './claude'
 import { jwLookup } from './justwatch'
 import { openLibraryLookup } from './sources/openlibrary'
 import { openGraphLookup } from './sources/opengraph'
+import { tmdbLookup } from './sources/tmdb'
+import { youtubeLookup } from './sources/youtube'
 
 const SYSTEM = `You enrich titles for a personal recommendation app called Cue.
 You will be given a title and a type. Return JSON ONLY — no prose, no markdown
@@ -206,6 +208,47 @@ function mergeOpenGraph(merged, og) {
   }
 }
 
+// Merge TMDB results over Claude's guesses for movie/tv. Real poster image is
+// the big win; canonical title/year/overview are also high-quality.
+function mergeTmdb(merged, tm, type) {
+  if (!tm) return merged
+  const ext = { ...merged.extension }
+  if (tm.year) {
+    if (type === 'movie') ext.release_year = tm.year
+    if (type === 'tv') ext.first_air_year = tm.year
+  }
+  if (tm.tmdb_vote != null) ext.tmdb_vote = tm.tmdb_vote
+  return {
+    ...merged,
+    title: tm.title || merged.title,
+    synopsis: merged.synopsis || tm.synopsis || '',
+    extension: ext,
+    image_url: tm.image_url || merged.image_url || null,
+    _tmdbHit: !!tm.image_url,
+  }
+}
+
+// Merge YouTube results over Claude's guesses for videos. Real thumbnail,
+// canonical title/channel, exact duration.
+function mergeYoutube(merged, yt) {
+  if (!yt) return merged
+  const ext = { ...merged.extension }
+  if (yt.channel) ext.channel = yt.channel
+  if (yt.duration_min) ext.duration_min = yt.duration_min
+  const links = yt.web_url
+    ? [{ label: 'YouTube', web_url: yt.web_url }, ...(merged.links || []).filter((l) => l.label !== 'YouTube')]
+    : merged.links
+  return {
+    ...merged,
+    title: yt.title || merged.title,
+    synopsis: merged.synopsis || yt.synopsis || '',
+    extension: ext,
+    image_url: yt.image_url || merged.image_url || null,
+    links,
+    _ytHit: true,
+  }
+}
+
 // Merge JustWatch results over Claude's guesses for movie/tv. JW gives real
 // streaming availability (US) + RT/IMDB scores + canonical title/year.
 function mergeJustWatch(merged, jw, type) {
@@ -234,20 +277,34 @@ function mergeJustWatch(merged, jw, type) {
   }
 }
 
-// Per-type external source lookups, run in parallel with Claude.
-function sourceLookupFor(type, input) {
-  if (type === 'movie' || type === 'tv') return jwLookup(input).catch(() => null)
-  if (type === 'book') return openLibraryLookup(input).catch(() => null)
-  if (type === 'article') return openGraphLookup(input).catch(() => null)
-  return Promise.resolve(null)
+// Per-type external source lookups, all run in parallel with Claude. Each
+// promise resolves to null on miss; none throw. Movie/tv fan out to both TMDB
+// (poster + canonical) and JustWatch (streaming + scoring) at once.
+async function gatherSources(type, input) {
+  if (type === 'movie' || type === 'tv') {
+    const [tmdb, jw] = await Promise.all([
+      tmdbLookup(input, type).catch(() => null),
+      jwLookup(input).catch(() => null),
+    ])
+    return { tmdb, jw }
+  }
+  if (type === 'book') return { ol: await openLibraryLookup(input).catch(() => null) }
+  if (type === 'article') return { og: await openGraphLookup(input).catch(() => null) }
+  if (type === 'video') return { yt: await youtubeLookup(input).catch(() => null) }
+  return {}
 }
 
-function applySource(merged, src, type) {
-  if (!src) return merged
-  if (type === 'movie' || type === 'tv') return mergeJustWatch(merged, src, type)
-  if (type === 'book') return mergeOpenLibrary(merged, src)
-  if (type === 'article') return mergeOpenGraph(merged, src)
-  return merged
+// Apply each successful source merge in priority order. TMDB before JustWatch
+// so the poster + canonical title win; JustWatch layers streaming + scores on
+// top without overwriting image_url.
+function applySources(merged, srcs, type) {
+  let out = merged
+  if (srcs.ol) out = mergeOpenLibrary(out, srcs.ol)
+  if (srcs.og) out = mergeOpenGraph(out, srcs.og)
+  if (srcs.tmdb) out = mergeTmdb(out, srcs.tmdb, type)
+  if (srcs.jw) out = mergeJustWatch(out, srcs.jw, type)
+  if (srcs.yt) out = mergeYoutube(out, srcs.yt)
+  return out
 }
 
 export async function enrich(title, type) {
@@ -257,9 +314,8 @@ export async function enrich(title, type) {
   const promptFn = PROMPTS[type]
   if (!promptFn) return fallbackCard(trimmed, type)
 
-  // Kick off the type-specific external source in parallel with Claude. None of
-  // them throw — they swallow errors and return null.
-  const sourcePromise = sourceLookupFor(type, trimmed)
+  // Kick off all type-specific external sources in parallel with Claude.
+  const sourcesPromise = gatherSources(type, trimmed)
 
   try {
     const raw = await claudeComplete(promptFn(trimmed), {
@@ -268,8 +324,8 @@ export async function enrich(title, type) {
     })
     const parsed = extractJSON(raw)
     if (!parsed || typeof parsed !== 'object') {
-      const src = await sourcePromise
-      return applySource(fallbackCard(trimmed, type), src, type)
+      const srcs = await sourcesPromise
+      return applySources(fallbackCard(trimmed, type), srcs, type)
     }
 
     const baseFallback = fallbackCard(trimmed, type)
@@ -283,10 +339,10 @@ export async function enrich(title, type) {
       links: Array.isArray(parsed.links) && parsed.links.length ? parsed.links : baseFallback.links,
       _fallback: false,
     }
-    const src = await sourcePromise
-    return applySource(merged, src, type)
+    const srcs = await sourcesPromise
+    return applySources(merged, srcs, type)
   } catch {
-    const src = await sourcePromise
-    return applySource(fallbackCard(trimmed, type), src, type)
+    const srcs = await sourcesPromise
+    return applySources(fallbackCard(trimmed, type), srcs, type)
   }
 }
