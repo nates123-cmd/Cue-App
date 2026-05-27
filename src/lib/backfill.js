@@ -10,7 +10,9 @@ import { openLibraryLookup } from './sources/openlibrary'
 import { openGraphLookup } from './sources/opengraph'
 import { youtubeLookup } from './sources/youtube'
 
-const FLAG = 'cue:backfill:image_url:v1'
+// Bump the version suffix to force backfill to retry on next load — useful
+// when the previous pass ran without API keys forwarded to the build.
+const FLAG = 'cue:backfill:image_url:v2'
 
 async function lookupFor(type, input) {
   if (type === 'movie' || type === 'tv') return tmdbLookup(input, type).catch(() => null)
