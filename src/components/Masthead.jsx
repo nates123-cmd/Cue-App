@@ -40,7 +40,7 @@ export const Masthead = ({ kicker, title, right }) => {
   const ed = useEdition()
   return (
     <header style={{
-      padding: '8px 20px 16px',
+      padding: 'calc(8px + env(safe-area-inset-top, 0px)) 20px 16px',
       borderBottom: '1px solid var(--hairline)',
       display: 'flex', flexDirection: 'column', gap: 6,
     }}>
