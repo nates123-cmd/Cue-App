@@ -213,6 +213,8 @@ export default function App() {
               onOpenItem={setOpenItem}
               density={density}
               onSetDensity={setDensity}
+              onDelete={onDelete}
+              onRequestFinish={onRequestFinish}
             />
           )}
           {page === 'active' && (

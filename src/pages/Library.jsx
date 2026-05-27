@@ -5,6 +5,7 @@ import {
   Card, Cover, Mono, RatingDots, SharedMark, StatusDot,
   btnGhost, btnTextChip, formatLengthShort, lengthBucket,
 } from '../components/primitives'
+import { SwipeRow } from '../components/SwipeRow'
 import { TYPE_META, TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 
@@ -62,7 +63,7 @@ const LibraryRow = ({ item, onClick }) => {
   )
 }
 
-export const LibraryPage = ({ items, onOpenItem, density, onSetDensity }) => {
+export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete, onRequestFinish }) => {
   const ed = useEdition()
   const partner = ed.partner || 'Amanda'
   const [typeFilter, setTypeFilter] = useState('all')
@@ -292,7 +293,17 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity }) => {
         </div>
       ) : (
         <div style={{ padding: '8px 20px 120px', display: 'flex', flexDirection: 'column' }}>
-          {filtered.map((i) => <LibraryRow key={i.id} item={i} onClick={() => onOpenItem(i)} />)}
+          {filtered.map((i) => (
+            <SwipeRow
+              key={i.id}
+              leftLabel="Watched"
+              rightLabel="Delete"
+              onSwipeLeft={() => onRequestFinish && onRequestFinish(i)}
+              onSwipeRight={() => onDelete && onDelete(i)}
+            >
+              <LibraryRow item={i} onClick={() => onOpenItem(i)} />
+            </SwipeRow>
+          ))}
         </div>
       )}
     </div>
