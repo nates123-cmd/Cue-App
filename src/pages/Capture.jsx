@@ -12,6 +12,7 @@ import { TYPE_META, TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 import { enrich } from '../lib/enrichment'
 import { claudeComplete, extractJSON } from '../lib/claude'
+import { BulkImport } from '../components/BulkImport'
 
 const TypeChip = ({ type, active, onClick }) => (
   <button onClick={onClick} style={{
@@ -318,6 +319,7 @@ export const CapturePage = ({ onAdd, onOpenCueBar, recommenders = [], items = []
   const [withPartner, setWithPartner] = useState(false)
   const [phase, setPhase] = useState('idle')
   const [draft, setDraft] = useState(null)
+  const [mode, setMode] = useState('suggest') // suggest | bulk
 
   const [suggestions, setSuggestions] = useState(null)
   const [suggestNonce, setSuggestNonce] = useState(0)
@@ -400,11 +402,24 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
         }
       />
       <div style={{ padding: '18px 20px 110px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[['suggest', 'One at a time'], ['bulk', 'Bulk import']].map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              appearance: 'none', cursor: 'pointer', flex: 1,
+              padding: '8px 4px', borderRadius: 3,
+              background: mode === m ? 'var(--paper)' : 'transparent',
+              border: `1px solid ${mode === m ? 'var(--signal)' : 'var(--hairline)'}`,
+              color: mode === m ? 'var(--text)' : 'var(--muted)',
+              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
+              transition: 'all 160ms ease',
+            }}>{label}</button>
+          ))}
+        </div>
         <div style={{
           border: '1px solid var(--hairline-strong)',
           background: 'var(--paper)',
           borderRadius: 3, padding: '14px 14px 12px',
-          display: 'flex', flexDirection: 'column', gap: 10,
+          display: mode === 'suggest' ? 'flex' : 'none', flexDirection: 'column', gap: 10,
           opacity: phase !== 'idle' ? 0.55 : 1,
           pointerEvents: phase !== 'idle' ? 'none' : 'auto',
           transition: 'opacity 200ms',
@@ -472,7 +487,7 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
           />
         )}
 
-        {phase === 'idle' && (
+        {mode === 'suggest' && phase === 'idle' && (
           <SmartSuggestions
             suggestions={suggestions ? suggestions.filter((s) => !dismissed.has(s.title)) : suggestions}
             edition={ed.label}
@@ -480,6 +495,10 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
             onRefresh={() => setSuggestNonce((n) => n + 1)}
             onDismiss={(s) => setDismissed((prev) => new Set(prev).add(s.title))}
           />
+        )}
+
+        {mode === 'bulk' && (
+          <BulkImport onAdd={onAdd} defaultType={type} partner={partner} />
         )}
       </div>
     </div>
