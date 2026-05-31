@@ -44,6 +44,30 @@ html, body, #root {
   overflow-x: hidden;
 }
 
+/* Suite text-selection sweep: suppress the accidental blue drag-highlight and
+   tap-highlight on chrome (the app paints most chrome as inline-styled divs),
+   then re-enable selection on the user's own content + form fields below. */
+html, body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Re-enable selection on form fields and the user's own content text
+   (titles, notes, names, recommendation/media metadata they may want to copy).
+   This app renders content in p/heading/span/li, so re-enable those broadly;
+   when unsure we keep text selectable. Interactive chrome (button/a/role=button)
+   stays non-selectable so drags across it never highlight. */
+input, textarea, select, [contenteditable],
+p, h1, h2, h3, h4, h5, h6, span, li, td, blockquote {
+  -webkit-user-select: text;
+  user-select: text;
+}
+button, button *, a, [role="button"], [role="button"] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 button { font-family: inherit; cursor: pointer; }
 input { font-family: inherit; }
 
