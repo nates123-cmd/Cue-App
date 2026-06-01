@@ -68,31 +68,37 @@ describe('metaFor — defensive lookup (must never throw / never return undefine
     expect(metaFor(undefined).spine).toBe('··')
   })
 
-  // KNOWN REAL APP BUG (documented, not patched) — src/lib/meta.js:16
-  //   return TYPE_META[type] || FALLBACK_META
+  // REGRESSION (fixed) — src/lib/meta.js:16
+  //   was:   return TYPE_META[type] || FALLBACK_META
+  //   now:   return Object.hasOwn(TYPE_META, type) ? TYPE_META[type] : FALLBACK_META
   // Because TYPE_META is a plain object literal, a `type` matching an
   // Object.prototype member name ('constructor', 'toString', 'valueOf',
-  // 'hasOwnProperty', ...) resolves via the prototype chain to a truthy
-  // function, so the `|| FALLBACK_META` guard NEVER fires. metaFor() then
-  // returns the Object constructor and callers reading `.spine` / `.label`
-  // (CueBar.jsx:23, primitives.jsx:85/131/...) get `undefined` — rendering a
+  // 'hasOwnProperty', '__proto__', ...) used to resolve via the prototype chain
+  // to a truthy function, so the `|| FALLBACK_META` guard NEVER fired. metaFor()
+  // returned the Object constructor and callers reading `.spine` / `.label`
+  // (CueBar.jsx:23, primitives.jsx:85/131/...) got `undefined` — rendering a
   // literal "undefined" and risking a throw on any `.spine.length` access.
-  // Fix would be `Object.hasOwn(TYPE_META, type) ? TYPE_META[type] : FALLBACK_META`
-  // or `Object.create(null)` for TYPE_META. The plural-fallback `|| 'article'`
-  // path in items.js normalizeType has the same class of exposure for type
-  // strings, but that one is value-gated by an includes() allowlist.
-  //
-  // This test pins the ACTUAL (buggy) shipped behavior so the suite stays green
-  // and the regression surface is documented. Flip the assertions if/when fixed.
-  it('REAL BUG: prototype-member type names bypass the fallback (returns Object ctor, .label undefined)', () => {
-    const r = metaFor('constructor')
-    expect(typeof r).toBe('function')        // returns the Object constructor, not FALLBACK_META
-    expect(r.label).toBeUndefined()          // caller would render "undefined"
-    expect(r.spine).toBeUndefined()
-    expect(metaFor('toString').label).toBeUndefined()
-    expect(metaFor('hasOwnProperty').label).toBeUndefined()
-    // Sanity: it still doesn't THROW (the defensive intent partially holds).
-    expect(() => metaFor('constructor')).not.toThrow()
+  // The own-property-gated lookup now makes these fall back like any other
+  // unknown type. These assertions pin the FIXED behavior.
+  const PROTO_NAMES = ['constructor', 'toString', '__proto__', 'hasOwnProperty']
+  it.each(PROTO_NAMES)('prototype-member type name %s falls back to FALLBACK_META (deep-equal)', (name) => {
+    const r = metaFor(name)
+    // Deep-equals the neutral placeholder, not the Object constructor / junk.
+    expect(r).toEqual({ label: 'Item', plural: 'Items', spine: '··' })
+    // And is the singleton fallback object the module returns for any unknown.
+    expect(r).toBe(metaFor('banana'))
+    expect(typeof r.label).toBe('string')
+    expect(typeof r.spine).toBe('string')
+    expect(() => metaFor(name)).not.toThrow()
+  })
+
+  it('a real valid type still returns its own meta (unchanged by the fix)', () => {
+    expect(metaFor('book')).toBe(TYPE_META.book)
+    expect(metaFor('book')).toEqual({ label: 'Book', plural: 'Books', spine: 'BK' })
+  })
+
+  it('an unknown plain string still returns FALLBACK_META (deep-equal)', () => {
+    expect(metaFor('banana')).toEqual({ label: 'Item', plural: 'Items', spine: '··' })
   })
 })
 

@@ -13,7 +13,7 @@ export const TYPE_ORDER = ['book', 'tv', 'movie', 'article', 'video']
 // renderer never throws on legacy data with surprise type values.
 const FALLBACK_META = { label: 'Item', plural: 'Items', spine: '··' }
 export function metaFor(type) {
-  return TYPE_META[type] || FALLBACK_META
+  return Object.hasOwn(TYPE_META, type) ? TYPE_META[type] : FALLBACK_META
 }
 
 // Co-viewing partner. Distinct from `recommended_by`.
