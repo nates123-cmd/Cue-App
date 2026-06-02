@@ -5,6 +5,7 @@
 import { claudeComplete, extractJSON } from './claude'
 import { jwLookup } from './justwatch'
 import { openLibraryLookup } from './sources/openlibrary'
+import { googleBooksLookup } from './sources/googlebooks'
 import { openGraphLookup } from './sources/opengraph'
 import { tmdbLookup } from './sources/tmdb'
 import { youtubeLookup } from './sources/youtube'
@@ -184,6 +185,28 @@ function mergeOpenLibrary(merged, ol) {
   }
 }
 
+// Merge a Google Books result (book) over Claude's guesses. Primary book facts
+// source: better covers, page counts, categories than Open Library. Applied
+// AFTER Open Library so GB wins overlapping fields; OL stays as the backfill.
+// Synopsis stays Claude's original wording (GB description is publisher blurb)
+// unless Claude left it empty.
+function mergeGoogleBooks(merged, gb) {
+  if (!gb) return merged
+  const ext = { ...merged.extension }
+  if (gb.author) ext.author = gb.author
+  if (gb.published_year) ext.published_year = gb.published_year
+  if (gb.page_count) ext.page_count = gb.page_count
+  if (gb.genre) ext.genre = gb.genre
+  return {
+    ...merged,
+    title: gb.title || merged.title,
+    synopsis: merged.synopsis || gb.synopsis || '',
+    extension: ext,
+    image_url: gb.image_url || merged.image_url || null,
+    _gbHit: !!gb.image_url,
+  }
+}
+
 // Merge OpenGraph article metadata over Claude's guesses. OG gives real source
 // + author + image + title; we still let Claude write the synopsis (OG
 // descriptions are often marketing copy or empty).
@@ -288,7 +311,13 @@ async function gatherSources(type, input) {
     ])
     return { tmdb, jw }
   }
-  if (type === 'book') return { ol: await openLibraryLookup(input).catch(() => null) }
+  if (type === 'book') {
+    const [gb, ol] = await Promise.all([
+      googleBooksLookup(input).catch(() => null),
+      openLibraryLookup(input).catch(() => null),
+    ])
+    return { gb, ol }
+  }
   if (type === 'article') return { og: await openGraphLookup(input).catch(() => null) }
   if (type === 'video') return { yt: await youtubeLookup(input).catch(() => null) }
   return {}
@@ -299,7 +328,9 @@ async function gatherSources(type, input) {
 // top without overwriting image_url.
 function applySources(merged, srcs, type) {
   let out = merged
+  // OL first, then GB — GB wins overlapping book fields, OL backfills gaps.
   if (srcs.ol) out = mergeOpenLibrary(out, srcs.ol)
+  if (srcs.gb) out = mergeGoogleBooks(out, srcs.gb)
   if (srcs.og) out = mergeOpenGraph(out, srcs.og)
   if (srcs.tmdb) out = mergeTmdb(out, srcs.tmdb, type)
   if (srcs.jw) out = mergeJustWatch(out, srcs.jw, type)
