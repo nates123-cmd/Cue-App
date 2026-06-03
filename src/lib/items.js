@@ -267,6 +267,7 @@ function patchToDb(patch) {
     image_tone: 'image_tone',
     cover_kind: 'cover_kind',
     title: 'title',
+    links: 'where_to_find',
   }
   // Map nested enrichment.synopsis → recommendations.summary, if present.
   const out = {}

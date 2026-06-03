@@ -8,6 +8,7 @@ import {
 } from './primitives'
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
+import { enrich } from '../lib/enrichment'
 
 // Small uppercased mono chip rendered just above the synopsis. Picks up the
 // suite signal color so it reads like a press-tag editorial label.
@@ -123,7 +124,34 @@ export const ItemDetail = ({
 }) => {
   if (!item) return null
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [enriching, setEnriching] = useState(false)
   const readOnly = item._source !== 'rec' // media/visit-derived items are read-only
+
+  // Fetch cover art + where-to-watch (and other type facts) for this item on
+  // demand, then patch them in. Reuses the same enrichment pipeline as capture.
+  const runEnrich = async () => {
+    if (readOnly || enriching) return
+    setEnriching(true)
+    try {
+      const card = await enrich(item.title, item.type)
+      const patch = {}
+      if (card.image_url) patch.image_url = card.image_url
+      if (card.image_tone) patch.image_tone = card.image_tone
+      if (card.cover_kind) patch.cover_kind = card.cover_kind
+      if (card.extension && Object.keys(card.extension).length) {
+        patch.extension = { ...(item.extension || {}), ...card.extension }
+      }
+      if (card.synopsis && !item.enrichment?.synopsis) {
+        patch.enrichment = { ...(item.enrichment || {}), synopsis: card.synopsis }
+      }
+      if (Array.isArray(card.links) && card.links.length) patch.links = card.links
+      if (Object.keys(patch).length && onPatch) onPatch(item, patch)
+    } catch (e) {
+      console.warn('enrich failed', e)
+    } finally {
+      setEnriching(false)
+    }
+  }
   const ext = item.extension || {}
   const meta = []
   if (item.type === 'book') meta.push(ext.author, ext.published_year, ext.page_count && `${ext.page_count} pp`)
@@ -190,6 +218,21 @@ export const ItemDetail = ({
               {meta.filter(Boolean).join(' · ')}
             </div>
           </div>
+
+          {!readOnly && (
+            <button onClick={runEnrich} disabled={enriching} style={{
+              ...btnGhost, alignSelf: 'flex-start',
+              opacity: enriching ? 0.6 : 1,
+              cursor: enriching ? 'wait' : 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 7,
+            }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: '50%', background: 'var(--signal)',
+                animation: enriching ? 'pulse-now 1s ease-in-out infinite' : 'none',
+              }} />
+              {enriching ? 'Enriching…' : '✦ Enrich — cover + where to watch'}
+            </button>
+          )}
 
           {/* Synopsis — editable. Genre chip leads as a small tag. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
