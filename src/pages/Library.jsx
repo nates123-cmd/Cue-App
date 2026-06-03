@@ -67,7 +67,9 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   const ed = useEdition()
   const partner = ed.partner || 'Amanda'
   const [typeFilter, setTypeFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
+  // Default to the working set — queued + active. 'done' stays selectable but
+  // hidden by default so finishing an item drops it out of the list.
+  const [statusFilter, setStatusFilter] = useState('open')
   const [from, setFrom] = useState('all')
   const [together, setTogether] = useState('all')
   const [genreFilter, setGenreFilter] = useState('all')
@@ -98,7 +100,8 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   const filtered = useMemo(() => {
     let r = items.slice()
     if (typeFilter !== 'all') r = r.filter((i) => i.type === typeFilter)
-    if (statusFilter !== 'all') r = r.filter((i) => i.status === statusFilter)
+    if (statusFilter === 'open') r = r.filter((i) => i.status !== 'done')
+    else if (statusFilter !== 'all') r = r.filter((i) => i.status === statusFilter)
     if (from !== 'all') r = r.filter((i) => i.recommended_by === from)
     if (together === 'with') r = r.filter((i) => (i.with || []).includes(partner))
     if (together === 'solo') r = r.filter((i) => !(i.with || []).includes(partner))
@@ -111,7 +114,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   }, [items, typeFilter, statusFilter, from, together, partner, genreFilter, lengthFilter, sort])
 
   const activeFilters = [
-    statusFilter !== 'all' && { key: 'status', label: statusFilter, clear: () => setStatusFilter('all') },
+    statusFilter !== 'open' && { key: 'status', label: statusFilter, clear: () => setStatusFilter('open') },
     lengthFilter !== 'all' && { key: 'length', label: lengthFilter, clear: () => setLengthFilter('all') },
     from !== 'all' && { key: 'from', label: `from ${from}`, clear: () => setFrom('all') },
     together === 'with' && { key: 'with', label: `with ${partner}`, clear: () => setTogether('all') },
@@ -120,7 +123,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   ].filter(Boolean)
 
   const clearAll = () => {
-    setStatusFilter('all'); setLengthFilter('all'); setFrom('all'); setTogether('all'); setGenreFilter('all')
+    setStatusFilter('open'); setLengthFilter('all'); setFrom('all'); setTogether('all'); setGenreFilter('all')
   }
 
   return (
@@ -216,9 +219,9 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <Mono size={9} dim style={{ minWidth: 48 }}>Status</Mono>
-              {['all', 'queued', 'active', 'done'].map((s) => (
+              {['open', 'queued', 'active', 'done', 'all'].map((s) => (
                 <button key={s} onClick={() => setStatusFilter(s)} style={btnTextChip(statusFilter === s)}>
-                  {s === 'all' ? 'any' : s}
+                  {s === 'open' ? 'in progress' : s === 'all' ? 'show done' : s}
                 </button>
               ))}
             </div>
