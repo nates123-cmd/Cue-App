@@ -191,12 +191,17 @@ const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
 // Shown above the draft when a title has 2+ distinct matches. Tap a row to
 // re-enrich locked to that exact item — fixes "searched Playground, got the
 // wrong one."
-const MatchPicker = ({ candidates, pickedKey, busy, onPick }) => (
+const MatchPicker = ({ candidates, pickedKey, busy, onPick, onDismiss }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <Mono size={9} style={{ color: 'var(--signal)' }}>More than one match</Mono>
       <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
-      <Mono size={9} dim>pick the right one</Mono>
+      <button onClick={onDismiss} disabled={busy} title="Back to search" style={{
+        appearance: 'none', cursor: busy ? 'wait' : 'pointer', background: 'transparent',
+        border: 0, padding: '2px 4px', color: 'var(--muted)',
+        fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+      }}>← edit search</button>
     </div>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {candidates.map((c) => {
@@ -481,6 +486,13 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
     setCandidates([]); setPickedKey(null)
   }
 
+  // Back out of the draft / match-picker to the capture form WITHOUT clearing
+  // the title — so the user can add detail and re-search. (reset() wipes; this
+  // doesn't.)
+  const backToEdit = () => {
+    setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null)
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <Masthead
@@ -509,14 +521,15 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
           background: 'var(--paper)',
           borderRadius: 3, padding: '14px 14px 12px',
           display: mode === 'suggest' ? 'flex' : 'none', flexDirection: 'column', gap: 10,
-          opacity: phase !== 'idle' ? 0.55 : 1,
-          pointerEvents: phase !== 'idle' ? 'none' : 'auto',
+          opacity: phase === 'enriching' ? 0.55 : 1,
+          pointerEvents: phase === 'enriching' ? 'none' : 'auto',
           transition: 'opacity 200ms',
         }}>
           <Mono size={9} dim>Title or URL</Mono>
           <input
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onFocus={() => { if (phase === 'draft') backToEdit() }}
+            onChange={(e) => { if (phase === 'draft') backToEdit(); setTitle(e.target.value) }}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder="Severance · Past Lives · The Overstory…"
             style={{
@@ -572,6 +585,7 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
             pickedKey={pickedKey}
             busy={phase === 'enriching'}
             onPick={pickCandidate}
+            onDismiss={backToEdit}
           />
         )}
         {phase === 'enriching' && <Enriching title={title} />}
