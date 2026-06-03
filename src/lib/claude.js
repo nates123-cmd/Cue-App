@@ -1,16 +1,15 @@
-// Client for the suite's shared Claude proxy edge function. The function's URL
-// slug is `quick-service` (its display name is "claude" but the slug differs —
-// hitting `/functions/v1/claude` 404s).
+// Client for the suite's shared Claude proxy edge function.
 //
-// Contract (per supabase/functions code):
-//   POST { task?, system, input, model?, maxTokens?, pdfBase64?, fetchUrl? }
-//   → { text }   (or { html, status } for fetchUrl mode)
-//   system + input are both required and must be non-empty.
-//   model ∈ {'claude-haiku-4-5', 'claude-sonnet-4-6'}; maxTokens cap 4096.
+// Enrichment uses the JWT-gated `claude` function: every suite app authenticates
+// (per-user OTP) so the Supabase session JWT authorizes the call — no client
+// secret. The older `quick-service` proxy gates on a shared STOCK_PROXY_SECRET
+// this build doesn't carry, so it returned 403 forbidden and nothing enriched
+// (patch #eeb8b4cd).
+//   POST { messages: [...], system?, model?, max_tokens? }  → { text, content }
+//   model ∈ {'claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8'}; cap 4096.
 //
-// Optional client-side gate: if VITE_CLAUDE_PROXY_SECRET is set, we forward it
-// as `x-stock-proxy-secret` so the proxy's STOCK_PROXY_SECRET check (if enabled
-// server-side) passes.
+// fetchUrlViaProxy still targets `quick-service` (the only function with a
+// server-side URL-fetch branch); VITE_CLAUDE_PROXY_SECRET still gates it.
 
 import { supabase } from './supabase'
 
@@ -24,14 +23,13 @@ export async function claudeComplete(prompt, opts = {}) {
     model = 'claude-sonnet-4-6',
   } = opts
 
-  const { data, error } = await supabase.functions.invoke('quick-service', {
+  const { data, error } = await supabase.functions.invoke('claude', {
     body: {
       system: system || DEFAULT_SYSTEM,
-      input: prompt,
+      messages: [{ role: 'user', content: prompt }],
       model,
-      maxTokens: max_tokens,
+      max_tokens,
     },
-    headers: PROXY_SECRET ? { 'x-stock-proxy-secret': PROXY_SECRET } : undefined,
   })
   if (error) throw error
   if (typeof data === 'string') return data
