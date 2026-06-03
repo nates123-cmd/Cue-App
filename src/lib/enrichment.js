@@ -4,11 +4,13 @@
 
 import { claudeComplete, extractJSON } from './claude'
 import { jwLookup } from './justwatch'
-import { openLibraryLookup } from './sources/openlibrary'
-import { googleBooksLookup } from './sources/googlebooks'
+import { openLibraryLookup, openLibrarySearch } from './sources/openlibrary'
+import { googleBooksLookup, googleBooksSearch } from './sources/googlebooks'
 import { openGraphLookup } from './sources/opengraph'
-import { tmdbLookup } from './sources/tmdb'
-import { youtubeLookup } from './sources/youtube'
+import { tmdbLookup, tmdbSearch } from './sources/tmdb'
+import { youtubeLookup, youtubeSearch } from './sources/youtube'
+
+const URL_RE = /^https?:\/\//i
 
 const SYSTEM = `You enrich titles for a personal recommendation app called Cue.
 You will be given a title and a type. Return JSON ONLY — no prose, no markdown
@@ -338,25 +340,48 @@ function applySources(merged, srcs, type) {
   return out
 }
 
-export async function enrich(title, type) {
+// When the user picked a specific candidate from the disambiguation list,
+// overlay that candidate's hard facts (cover/title/year/author…) on top of the
+// merged card so the picked identity always wins — even if the re-query drifted.
+// Reuses the per-source merge helpers; locked.raw matches each source's shape.
+function applyLockedFacts(card, locked, type) {
+  const r = locked?.raw
+  if (!r) return card
+  if (type === 'book') return mergeGoogleBooks(card, r)
+  if (type === 'movie' || type === 'tv') return mergeTmdb(card, r, type)
+  if (type === 'video') return mergeYoutube(card, r)
+  return card
+}
+
+// `locked` (optional) is a candidate chosen from searchCandidates(); its
+// disambiguating query drives Claude + the source re-lookup, and its facts are
+// overlaid last so the exact picked item wins.
+export async function enrich(title, type, locked = null) {
   const trimmed = (title || '').trim()
   if (!trimmed) return fallbackCard('', type)
 
   const promptFn = PROMPTS[type]
   if (!promptFn) return fallbackCard(trimmed, type)
 
+  // A locked candidate carries a more specific query (e.g. "title author").
+  const queryInput = (locked?.query || trimmed).trim()
+  const finalize = (card, srcs) => {
+    const out = applySources(card, srcs, type)
+    return locked ? applyLockedFacts(out, locked, type) : out
+  }
+
   // Kick off all type-specific external sources in parallel with Claude.
-  const sourcesPromise = gatherSources(type, trimmed)
+  const sourcesPromise = gatherSources(type, queryInput)
 
   try {
-    const raw = await claudeComplete(promptFn(trimmed), {
+    const raw = await claudeComplete(promptFn(queryInput), {
       system: SYSTEM,
       max_tokens: 800,
     })
     const parsed = extractJSON(raw)
     if (!parsed || typeof parsed !== 'object') {
       const srcs = await sourcesPromise
-      return applySources(fallbackCard(trimmed, type), srcs, type)
+      return finalize(fallbackCard(trimmed, type), srcs)
     }
 
     const baseFallback = fallbackCard(trimmed, type)
@@ -371,9 +396,74 @@ export async function enrich(title, type) {
       _fallback: false,
     }
     const srcs = await sourcesPromise
-    return applySources(merged, srcs, type)
+    return finalize(merged, srcs)
   } catch {
     const srcs = await sourcesPromise
-    return applySources(fallbackCard(trimmed, type), srcs, type)
+    return finalize(fallbackCard(trimmed, type), srcs)
   }
+}
+
+// Top candidate matches for the disambiguation picker. Returns a normalized,
+// deduped list; the caller shows a picker only when it finds 2+ distinct
+// entries. Books prefer Google Books, falling back to Open Library on a 429.
+// Articles (URL-based) and any URL input are exact — no candidates.
+export async function searchCandidates(type, query) {
+  const q = (query || '').trim()
+  if (!q || URL_RE.test(q)) return []
+
+  let raws = []
+  if (type === 'book') {
+    const [gb, ol] = await Promise.all([
+      googleBooksSearch(q).catch(() => []),
+      openLibrarySearch(q).catch(() => []),
+    ])
+    raws = gb.length ? gb : ol
+  } else if (type === 'movie' || type === 'tv') {
+    raws = await tmdbSearch(q, type).catch(() => [])
+  } else if (type === 'video') {
+    raws = await youtubeSearch(q).catch(() => [])
+  } else {
+    return []
+  }
+
+  const seen = new Set()
+  const out = []
+  for (const r of raws) {
+    const norm = normalizeCandidate(r, type)
+    if (!norm) continue
+    const key = `${norm.title.toLowerCase().trim()}|${(norm.subtitle || '').toLowerCase().trim()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ ...norm, key })
+  }
+  return out
+}
+
+function normalizeCandidate(r, type) {
+  if (!r || !r.title) return null
+  if (type === 'book') {
+    return {
+      type, title: r.title, subtitle: r.author || '', year: r.published_year || null,
+      image_url: r.image_url || null,
+      query: [r.title, r.author].filter(Boolean).join(' '),
+      raw: r,
+    }
+  }
+  if (type === 'movie' || type === 'tv') {
+    return {
+      type, title: r.title, subtitle: r.year ? String(r.year) : '', year: r.year || null,
+      image_url: r.image_url || null,
+      query: [r.title, r.year].filter(Boolean).join(' '),
+      raw: r,
+    }
+  }
+  if (type === 'video') {
+    return {
+      type, title: r.title, subtitle: r.channel || '', year: null,
+      image_url: r.image_url || null,
+      query: r.web_url || [r.title, r.channel].filter(Boolean).join(' '),
+      raw: r,
+    }
+  }
+  return null
 }

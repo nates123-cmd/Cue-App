@@ -82,3 +82,43 @@ export async function youtubeLookup(input) {
   if (id) return await fetchById(id)
   return await fetchByQuery(i)
 }
+
+// Top-N candidate matches for the disambiguation picker. Snippet-only (no
+// per-video details call — saves quota); duration is filled later by the
+// locked re-enrich. A URL input resolves to a single exact video. Empty array
+// on miss/no-key.
+export async function youtubeSearch(input, n = 6) {
+  if (!API_KEY) return []
+  const i = (input || '').trim()
+  if (!i) return []
+  const id = extractVideoId(i)
+  if (id) {
+    const r = await fetchById(id)
+    return r ? [r] : []
+  }
+  try {
+    const params = new URLSearchParams({
+      q: i, part: 'snippet', type: 'video', maxResults: String(n), key: API_KEY,
+    })
+    const res = await fetch(`${BASE}/search?${params}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data?.items || [])
+      .map((item) => {
+        const vid = item?.id?.videoId
+        if (!vid) return null
+        return {
+          title: item.snippet?.title || null,
+          channel: item.snippet?.channelTitle || null,
+          synopsis: item.snippet?.description?.slice(0, 400) || null,
+          image_url: bestThumb(item.snippet),
+          duration_min: null,
+          youtube_id: vid,
+          web_url: `https://www.youtube.com/watch?v=${vid}`,
+        }
+      })
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}

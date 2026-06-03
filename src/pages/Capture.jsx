@@ -10,7 +10,7 @@ import { RecommenderPicker } from '../components/RecommenderPicker'
 import { EditableField } from '../components/EditableField'
 import { TYPE_META, TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
-import { enrich } from '../lib/enrichment'
+import { enrich, searchCandidates } from '../lib/enrichment'
 import { claudeComplete, extractJSON } from '../lib/claude'
 import { BulkImport } from '../components/BulkImport'
 
@@ -188,6 +188,62 @@ const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
   )
 }
 
+// Shown above the draft when a title has 2+ distinct matches. Tap a row to
+// re-enrich locked to that exact item — fixes "searched Playground, got the
+// wrong one."
+const MatchPicker = ({ candidates, pickedKey, busy, onPick }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <Mono size={9} style={{ color: 'var(--signal)' }}>More than one match</Mono>
+      <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
+      <Mono size={9} dim>pick the right one</Mono>
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {candidates.map((c) => {
+        const active = c.key === pickedKey
+        const yr = c.year && !String(c.subtitle).includes(String(c.year)) ? c.year : null
+        const meta = [c.subtitle, yr].filter(Boolean).join(' · ')
+        return (
+          <button key={c.key} disabled={busy} onClick={() => onPick(c)} style={{
+            appearance: 'none', cursor: busy ? 'wait' : 'pointer', textAlign: 'left', width: '100%',
+            display: 'grid', gridTemplateColumns: '34px 1fr auto', alignItems: 'center', gap: 12,
+            padding: '8px 10px',
+            background: active ? 'color-mix(in oklab, var(--signal) 12%, var(--paper))' : 'var(--paper)',
+            border: `1px solid ${active ? 'var(--signal)' : 'var(--hairline)'}`,
+            borderRadius: 3, color: 'var(--text)', transition: 'all 160ms ease',
+            opacity: busy && !active ? 0.5 : 1,
+          }}>
+            <div style={{
+              width: 34, height: 48, borderRadius: 2, overflow: 'hidden', background: 'var(--hairline)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)',
+            }}>
+              {c.image_url
+                ? <img src={c.image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <TypeIcon type={c.type} size={14} weight={1.4} />}
+            </div>
+            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{
+                fontFamily: 'var(--display)', fontSize: 15, lineHeight: 1.15, color: 'var(--text)',
+                display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>{c.title}</div>
+              {meta && (
+                <div style={{
+                  fontFamily: 'var(--body)', fontSize: 11, color: 'var(--muted)', fontStyle: 'italic',
+                  display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                }}>{meta}</div>
+              )}
+            </div>
+            <span style={{
+              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.14em', textTransform: 'uppercase',
+              color: active ? 'var(--signal)' : 'var(--muted)',
+            }}>{active ? 'shown' : 'use'}</span>
+          </button>
+        )
+      })}
+    </div>
+  </div>
+)
+
 const SmartSuggestions = ({ suggestions, edition, onPick, onRefresh, onDismiss }) => {
   const loading = suggestions === null
   const empty = !loading && suggestions.length === 0
@@ -320,6 +376,10 @@ export const CapturePage = ({ onAdd, onOpenCueBar, recommenders = [], items = []
   const [phase, setPhase] = useState('idle')
   const [draft, setDraft] = useState(null)
   const [mode, setMode] = useState('suggest') // suggest | bulk
+  // Disambiguation: candidate matches when the title is ambiguous (2+ distinct
+  // hits), and the key of the one currently shown in the draft.
+  const [candidates, setCandidates] = useState([])
+  const [pickedKey, setPickedKey] = useState(null)
 
   const [suggestions, setSuggestions] = useState(null)
   const [suggestNonce, setSuggestNonce] = useState(0)
@@ -376,20 +436,49 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ed.label, partner, suggestNonce])
 
+  // Stamp the capture-form metadata onto an enriched card.
+  const decorate = (card) => {
+    card.recommended_by = recommendedBy
+    card.with = withPartner ? [partner] : []
+    card.status = 'queued'
+    return card
+  }
+
   const submit = async () => {
-    if (!title.trim()) return
+    const q = title.trim()
+    if (!q) return
     setPhase('enriching')
     setDraft(null)
-    const enriched = await enrich(title.trim(), type)
-    enriched.recommended_by = recommendedBy
-    enriched.with = withPartner ? [partner] : []
-    enriched.status = 'queued'
-    setDraft(enriched)
+    setCandidates([])
+    setPickedKey(null)
+    // Enrich the best guess and look for alternate matches at the same time.
+    const [enriched, cands] = await Promise.all([
+      enrich(q, type),
+      searchCandidates(type, q).catch(() => []),
+    ])
+    setDraft(decorate(enriched))
+    setPhase('draft')
+    // Only surface the picker when the title is genuinely ambiguous.
+    if (cands.length >= 2) {
+      setCandidates(cands)
+      setPickedKey(cands[0].key) // best guess ≈ first hit, matches auto-enrich
+    }
+  }
+
+  // User picked a different match → re-enrich locked to that exact candidate.
+  const pickCandidate = async (cand) => {
+    if (cand.key === pickedKey) return
+    setPickedKey(cand.key)
+    setPhase('enriching')
+    setDraft(null)
+    const enriched = await enrich(cand.title, type, cand)
+    setDraft(decorate(enriched))
     setPhase('draft')
   }
 
   const reset = () => {
     setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false)
+    setCandidates([]); setPickedKey(null)
   }
 
   return (
@@ -477,6 +566,14 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
           </div>
         </div>
 
+        {candidates.length > 1 && (phase === 'draft' || phase === 'enriching') && (
+          <MatchPicker
+            candidates={candidates}
+            pickedKey={pickedKey}
+            busy={phase === 'enriching'}
+            onPick={pickCandidate}
+          />
+        )}
         {phase === 'enriching' && <Enriching title={title} />}
         {phase === 'draft' && draft && (
           <DraftCard

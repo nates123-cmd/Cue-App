@@ -28,6 +28,22 @@ function cleanCover(url) {
     .replace(/&zoom=\d/, '&zoom=1')
 }
 
+// volumeInfo → the partial-enrichment shape the merge layer expects.
+function volumeToFacts(v) {
+  if (!v) return null
+  // publishedDate is "2007", "2007-03", or "2007-03-01" — first 4 = year.
+  const year = v.publishedDate ? parseInt(String(v.publishedDate).slice(0, 4), 10) || null : null
+  return {
+    title: v.title || null,
+    author: Array.isArray(v.authors) ? v.authors[0] : null,
+    published_year: year,
+    page_count: v.pageCount || null,
+    genre: Array.isArray(v.categories) ? v.categories[0] : null,
+    synopsis: v.description || null,
+    image_url: cleanCover(v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail),
+  }
+}
+
 export async function googleBooksLookup(title) {
   const t = (title || '').trim()
   if (!t) return null
@@ -39,20 +55,27 @@ export async function googleBooksLookup(title) {
     const res = await fetch(`${VOLUMES_URL}?${params}`)
     if (!res.ok) return null
     const data = await res.json()
-    const v = data?.items?.[0]?.volumeInfo
-    if (!v) return null
-    // publishedDate is "2007", "2007-03", or "2007-03-01" — first 4 = year.
-    const year = v.publishedDate ? parseInt(String(v.publishedDate).slice(0, 4), 10) || null : null
-    return {
-      title: v.title || null,
-      author: Array.isArray(v.authors) ? v.authors[0] : null,
-      published_year: year,
-      page_count: v.pageCount || null,
-      genre: Array.isArray(v.categories) ? v.categories[0] : null,
-      synopsis: v.description || null,
-      image_url: cleanCover(v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail),
-    }
+    return volumeToFacts(data?.items?.[0]?.volumeInfo)
   } catch {
     return null
+  }
+}
+
+// Top-N candidate matches for the disambiguation picker. Same fact shape as
+// googleBooksLookup, one per distinct volume. Empty array on miss/429.
+export async function googleBooksSearch(title, n = 6) {
+  const t = (title || '').trim()
+  if (!t) return []
+  const isbn = asIsbn(t)
+  const q = isbn ? `isbn:${isbn}` : t
+  try {
+    const params = new URLSearchParams({ q, maxResults: String(n), printType: 'books' })
+    if (API_KEY) params.set('key', API_KEY)
+    const res = await fetch(`${VOLUMES_URL}?${params}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data?.items || []).map((it) => volumeToFacts(it?.volumeInfo)).filter(Boolean)
+  } catch {
+    return []
   }
 }
