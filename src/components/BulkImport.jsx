@@ -167,7 +167,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
             <Mono size={9} dim style={{ display: 'block', marginBottom: 6 }}>
               Default type (for lines with no type)
             </Mono>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
               {TYPE_ORDER.map((t) => (
                 <button key={t} onClick={() => setType(t)} style={{
                   appearance: 'none', cursor: 'pointer',

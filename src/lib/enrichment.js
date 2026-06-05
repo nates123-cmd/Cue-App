@@ -136,6 +136,28 @@ Return JSON with this exact shape:
   ]
 }
 ${SHARED_RULES}`,
+
+  podcast: (title) => `Enrich this podcast (show name): "${title}"
+
+Return JSON with this exact shape:
+{
+  "title": "official show name",
+  "synopsis": "2-3 sentences on what the show is about",
+  "extension": {
+    "host": "...",
+    "publisher": "network or studio",
+    "genre": "...",
+    "cadence": "weekly | daily | seasonal | etc."
+  },
+  "image_tone": ["#hex", "#hex"],
+  "cover_kind": "type",
+  "links": [
+    { "label": "Apple Podcasts" },
+    { "label": "Spotify" },
+    { "label": "Overcast" }
+  ]
+}
+${SHARED_RULES}`,
 }
 
 // Minimal fallback — all fields manually editable.
@@ -146,6 +168,7 @@ function fallbackCard(title, type) {
     movie:   ['#2a1a1f', '#a35a7a'],
     article: ['#23252a', '#7a7d85'],
     video:   ['#2a1f1a', '#a3633a'],
+    podcast: ['#1f1a2a', '#7a5aa3'],
   }
   const links = {
     book:    [{ label: 'Libby' }, { label: 'Goodreads' }, { label: 'Bookshop' }],
@@ -153,6 +176,7 @@ function fallbackCard(title, type) {
     movie:   [{ label: 'JustWatch' }, { label: 'Letterboxd' }, { label: 'IMDb' }],
     article: [{ label: 'Read' }],
     video:   [{ label: 'YouTube' }],
+    podcast: [{ label: 'Apple Podcasts' }, { label: 'Spotify' }, { label: 'Overcast' }],
   }
   const coverKind = type === 'video' ? 'thumb'
     : (type === 'movie' || type === 'tv') ? 'poster'

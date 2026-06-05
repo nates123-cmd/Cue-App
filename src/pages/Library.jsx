@@ -17,6 +17,7 @@ const LibraryRow = ({ item, onClick }) => {
   if (item.type === 'movie') meta.push(ext.director, ext.release_year)
   if (item.type === 'article') meta.push(ext.source)
   if (item.type === 'video') meta.push(ext.channel)
+  if (item.type === 'podcast') meta.push(ext.host, ext.publisher)
   const lenShort = formatLengthShort(item)
   if (lenShort) meta.push(lenShort)
   return (

@@ -37,6 +37,13 @@ export function TypeIcon({ type, size = 18, weight = 1.5 }) {
           <path d="M10 9.5l5 2.5-5 2.5v-5z" fill="currentColor" stroke="none" />
         </svg>
       )
+    case 'podcast':
+      return (
+        <svg viewBox="0 0 24 24" style={s}>
+          <rect x="8.5" y="3" width="7" height="11" rx="3.5" />
+          <path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7" />
+        </svg>
+      )
     default:
       return null
   }

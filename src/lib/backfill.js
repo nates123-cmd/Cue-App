@@ -97,7 +97,7 @@ export async function backfillMissingImages(items, opts = {}) {
   // genre. We only act on items where at least one of those gaps exists.
   const candidates = items.filter((i) => {
     if (i._source !== 'rec') return false
-    if (!['book', 'tv', 'movie', 'article', 'video'].includes(i.type)) return false
+    if (!['book', 'tv', 'movie', 'article', 'video', 'podcast'].includes(i.type)) return false
     const noImage = !i.image_url
     const noSynopsis = !i.enrichment?.synopsis || !i.enrichment.synopsis.trim()
     const noGenre = !i.extension?.genre

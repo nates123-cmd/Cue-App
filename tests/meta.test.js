@@ -15,7 +15,7 @@ import {
 // unguarded, so a thrown error or undefined return would crash the renderer.
 // ---------------------------------------------------------------------------
 describe('metaFor — defensive lookup (must never throw / never return undefined)', () => {
-  const KNOWN = ['book', 'tv', 'movie', 'article', 'video']
+  const KNOWN = ['book', 'tv', 'movie', 'article', 'video', 'podcast']
 
   it('returns the correct meta object for each of the known types', () => {
     for (const t of KNOWN) {
@@ -107,9 +107,9 @@ describe('metaFor — defensive lookup (must never throw / never return undefine
 // (restaurants moved to Ink). Pin the actual shipped contract.
 // ---------------------------------------------------------------------------
 describe('type registry — TYPE_META / TYPE_ORDER', () => {
-  it('registry has exactly the five media types (restaurants moved to Ink)', () => {
+  it('registry has exactly the six media types (restaurants moved to Ink; podcast added)', () => {
     expect(Object.keys(TYPE_META).sort()).toEqual(
-      ['article', 'book', 'movie', 'tv', 'video'].sort()
+      ['article', 'book', 'movie', 'podcast', 'tv', 'video'].sort()
     )
   })
 

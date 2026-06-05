@@ -159,6 +159,7 @@ export const ItemDetail = ({
   if (item.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (item.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (item.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
+  if (item.type === 'podcast') meta.push(ext.host, ext.publisher, ext.cadence)
 
   const setRating = (n) => {
     if (readOnly) return

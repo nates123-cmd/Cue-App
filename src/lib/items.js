@@ -15,14 +15,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
-// Normalize legacy values to Cue's five types. Unknown types collapse to
+// Normalize legacy values to Cue's media types. Unknown types collapse to
 // 'article' (most generic — text-cover renderer, no type-specific extension).
 // Legacy 'restaurant' rows also collapse to 'article' so they don't crash the
 // renderer (they're still in the DB but no longer surfaced as their own type).
 function normalizeType(t) {
   if (!t) return 'article'
   if (t === 'film') return 'movie'
-  if (['book', 'tv', 'movie', 'article', 'video'].includes(t)) return t
+  if (['book', 'tv', 'movie', 'article', 'video', 'podcast'].includes(t)) return t
   return 'article'
 }
 
