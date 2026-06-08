@@ -31,6 +31,7 @@ jobs:
           VITE_CLAUDE_PROXY_SECRET: ${{ secrets.VITE_CLAUDE_PROXY_SECRET }}
           VITE_TMDB_API_KEY: ${{ secrets.VITE_TMDB_API_KEY }}
           VITE_YT_API_KEY: ${{ secrets.VITE_YT_API_KEY }}
+          VITE_GOOGLE_BOOKS_KEY: ${{ secrets.VITE_GOOGLE_BOOKS_KEY }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
