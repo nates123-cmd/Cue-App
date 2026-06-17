@@ -169,6 +169,22 @@ export default function App() {
 
   const onFinishFromActive = async (item) => onRequestFinish(item)
 
+  // Cross-system hook: queue a movie/TV item for download on the home *arr stack.
+  // Writes a media_requests row; a poller on the Beelink picks it up (Radarr/Sonarr).
+  // user_id is filled by the DB default (auth.uid()); RLS scopes it to this user.
+  const pushToRadarr = async (item) => {
+    const ext = item.extension || {}
+    const tmdbId = ext.tmdb_id ? Number(ext.tmdb_id) : null
+    const year = ext.release_year || ext.first_air_year || ext.published_year || null
+    const { error } = await supabase.from('media_requests').insert({
+      media_type: item.type === 'tv' ? 'tv' : 'movie',
+      tmdb_id: Number.isFinite(tmdbId) ? tmdbId : null,
+      title: item.title,
+      year: year ? Number(year) : null,
+    })
+    if (error) throw error
+  }
+
   const signOut = () => supabase.auth.signOut()
 
   return (
@@ -281,6 +297,7 @@ export default function App() {
             onRequestFinish={onRequestFinish}
             onPromoteToLibrary={onPromoteToLibrary}
             onDelete={onDelete}
+            onPushToRadarr={pushToRadarr}
             partner={PARTNER}
             recommenders={recommenders}
           />

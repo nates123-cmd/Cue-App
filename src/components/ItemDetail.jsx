@@ -119,12 +119,13 @@ const TagEditor = ({ tags = [], onChange }) => {
 
 export const ItemDetail = ({
   item, onClose, onChangeStatus, onToggleWith,
-  onPatch, onRequestFinish, onPromoteToLibrary, onDelete,
+  onPatch, onRequestFinish, onPromoteToLibrary, onDelete, onPushToRadarr,
   partner = 'Amanda', recommenders = [],
 }) => {
   if (!item) return null
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [enriching, setEnriching] = useState(false)
+  const [pushState, setPushState] = useState(null) // null | 'pushing' | 'sent' | 'error'
   const readOnly = item._source !== 'rec' // media/visit-derived items are read-only
 
   // Fetch cover art + where-to-watch (and other type facts) for this item on
@@ -150,6 +151,20 @@ export const ItemDetail = ({
       console.warn('enrich failed', e)
     } finally {
       setEnriching(false)
+    }
+  }
+  // Queue this movie/TV item for download on the home *arr stack (Radarr/Sonarr)
+  // via the media_requests outbox. A poller on the server picks it up.
+  const runPush = async () => {
+    if (pushState === 'pushing' || pushState === 'sent' || !onPushToRadarr) return
+    setPushState('pushing')
+    try {
+      await onPushToRadarr(item)
+      setPushState('sent')
+    } catch (e) {
+      console.warn('push to radarr failed', e)
+      setPushState('error')
+      setTimeout(() => setPushState(null), 2600)
     }
   }
   const ext = item.extension || {}
@@ -232,6 +247,22 @@ export const ItemDetail = ({
                 animation: enriching ? 'pulse-now 1s ease-in-out infinite' : 'none',
               }} />
               {enriching ? 'Enriching…' : '✦ Enrich — cover + where to watch'}
+            </button>
+          )}
+
+          {(item.type === 'movie' || item.type === 'tv') && onPushToRadarr && (
+            <button onClick={runPush} disabled={pushState === 'pushing' || pushState === 'sent'} style={{
+              ...btnGhost, alignSelf: 'flex-start',
+              opacity: pushState === 'pushing' ? 0.6 : 1,
+              cursor: pushState === 'pushing' ? 'wait' : pushState === 'sent' ? 'default' : 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 7,
+              ...(pushState === 'sent' ? { borderColor: 'var(--signal)', color: 'var(--signal)' } : {}),
+            }}>
+              <span style={{ fontSize: 11 }}>➤</span>
+              {pushState === 'pushing' ? 'Sending…'
+                : pushState === 'sent' ? `Queued in ${item.type === 'tv' ? 'Sonarr' : 'Radarr'} ✓`
+                : pushState === 'error' ? 'Failed — tap to retry'
+                : `Push to ${item.type === 'tv' ? 'Sonarr' : 'Radarr'}`}
             </button>
           )}
 
