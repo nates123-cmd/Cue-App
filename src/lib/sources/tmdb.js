@@ -1,31 +1,73 @@
-// TMDB v3 lookup for movies + TV. Requires VITE_TMDB_API_KEY (the v3 "API Key"
-// field at https://www.themoviedb.org/settings/api — explicitly safe for
-// client-side use per TMDB's docs). Returns null if the key is missing or
+// TMDB v3 lookup for movies + TV. Returns null if the key is missing or
 // nothing matches.
+//
+// KEY: TMDB needs the v3 "API Key" (the `api_key` query param) from
+// https://www.themoviedb.org/settings/api — explicitly safe for client-side use
+// per TMDB's docs (mirrors how Google Books reads VITE_GOOGLE_BOOKS_KEY
+// client-side). We read VITE_TMDB_KEY first (the suite-standard name), falling
+// back to the older VITE_TMDB_API_KEY so existing builds keep working.
+// TODO: set VITE_TMDB_KEY in the deploy env (and .env for local dev). Without it
+// every lookup returns null and movie/tv enrichment degrades gracefully to
+// Claude-only.
 
-const API_KEY = import.meta.env.VITE_TMDB_API_KEY
+const API_KEY = import.meta.env.VITE_TMDB_KEY || import.meta.env.VITE_TMDB_API_KEY || ''
 const BASE = 'https://api.themoviedb.org/3'
 const IMG = (path, size = 'w500') => `https://image.tmdb.org/t/p/${size}${path}`
 
-// TMDB search result → the partial-enrichment shape the merge layer expects.
+function isType(type) {
+  return type === 'movie' || type === 'tv'
+}
+
+// "2013-05-17" / "2013" → 2013.
+function yearOf(date) {
+  if (!date) return null
+  return Number(String(date).slice(0, 4)) || null
+}
+
+// A TMDB search/detail object → the partial-enrichment shape the merge layer
+// expects. Every field is null when absent so a sparse result never clobbers a
+// good Claude value. `genres`/`runtime`/`director`/`creator` only appear on the
+// detail payload (search results omit them) — they stay null from search.
 function resultToFacts(r, type) {
   if (!r) return null
   const dateField = type === 'movie' ? r.release_date : r.first_air_date
-  const year = dateField ? Number(dateField.slice(0, 4)) : null
+  // Detail-only fields, defensively read.
+  const genres = Array.isArray(r.genres)
+    ? r.genres.map((g) => g?.name).filter(Boolean)
+    : null
+  const runtime = type === 'movie'
+    ? (typeof r.runtime === 'number' ? r.runtime : null)
+    : (Array.isArray(r.episode_run_time) && r.episode_run_time.length
+        ? r.episode_run_time[0]
+        : null)
+  // Director (movie, from /credits append) / creator (tv, created_by).
+  let director = null
+  if (type === 'movie' && Array.isArray(r.credits?.crew)) {
+    director = r.credits.crew.find((c) => c?.job === 'Director')?.name || null
+  }
+  let creator = null
+  if (type === 'tv' && Array.isArray(r.created_by) && r.created_by.length) {
+    creator = r.created_by.map((c) => c?.name).filter(Boolean)[0] || null
+  }
   return {
-    title: type === 'movie' ? r.title : r.name,
-    year,
+    title: (type === 'movie' ? r.title : r.name) || null,
+    year: yearOf(dateField),
     synopsis: r.overview || null,
     image_url: r.poster_path ? IMG(r.poster_path, 'w500') : null,
     backdrop_url: r.backdrop_path ? IMG(r.backdrop_path, 'w780') : null,
     tmdb_vote: typeof r.vote_average === 'number' ? r.vote_average : null,
-    tmdb_id: r.id,
+    tmdb_id: r.id ?? null,
+    runtime,
+    genres: genres && genres.length ? genres : null,
+    genre: genres && genres.length ? genres[0] : null,
+    director,
+    creator,
   }
 }
 
-async function tmdbResults(title, type, n) {
+async function tmdbSearchResults(title, type, n) {
   const t = (title || '').trim()
-  if (!API_KEY || !t || (type !== 'movie' && type !== 'tv')) return []
+  if (!API_KEY || !t || !isType(type)) return []
   const endpoint = type === 'movie' ? 'search/movie' : 'search/tv'
   const params = new URLSearchParams({
     api_key: API_KEY,
@@ -40,18 +82,48 @@ async function tmdbResults(title, type, n) {
   return (data?.results || []).slice(0, n).map((r) => resultToFacts(r, type)).filter(Boolean)
 }
 
+// Fetch the full detail record (runtime, genres, director/creator) for one id.
+// `append_to_response=credits` gets the director in the same round-trip (cheap).
+async function tmdbDetail(id, type) {
+  if (!API_KEY || id == null || !isType(type)) return null
+  const params = new URLSearchParams({
+    api_key: API_KEY,
+    language: 'en-US',
+    append_to_response: type === 'movie' ? 'credits' : '',
+  })
+  const res = await fetch(`${BASE}/${type}/${id}?${params}`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+// Top match, enriched with the detail call so runtime / genres / director land
+// on the card. Falls back to the search-only facts if the detail fetch misses.
 export async function tmdbLookup(title, type) {
   try {
-    return (await tmdbResults(title, type, 1))[0] || null
+    const top = (await tmdbSearchResults(title, type, 1))[0]
+    if (!top) return null
+    if (top.tmdb_id == null) return top
+    const detail = await tmdbDetail(top.tmdb_id, type).catch(() => null)
+    if (!detail) return top
+    const full = resultToFacts(detail, type)
+    if (!full) return top
+    // Detail wins where present; search facts backfill any null.
+    return {
+      ...top,
+      ...Object.fromEntries(Object.entries(full).filter(([, v]) => v != null)),
+    }
   } catch {
     return null
   }
 }
 
-// Top-N candidate matches for the disambiguation picker. Empty array on miss.
+// Top-N candidate matches for the disambiguation picker. Search-only (no
+// per-id detail call — saves N requests); runtime / genres / director fill in
+// when the user picks one and the locked re-enrich runs tmdbLookup. Empty array
+// on miss / no key.
 export async function tmdbSearch(title, type, n = 6) {
   try {
-    return await tmdbResults(title, type, n)
+    return await tmdbSearchResults(title, type, n)
   } catch {
     return []
   }

@@ -82,6 +82,7 @@ const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
   if (draft.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (draft.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
   if (draft.type === 'podcast') meta.push(ext.host, ext.publisher, ext.cadence)
+  if (draft.type === 'music') meta.push(ext.artist, ext.published_year, ext.label, ext.track_count && `${ext.track_count} tracks`)
   const metaLine = meta.filter(Boolean).join(' · ')
 
   return (
@@ -416,11 +417,11 @@ ${libraryDump || '(empty)'}
 ${dismissed.size ? `- They have already dismissed: ${[...dismissed].join(', ')}` : ''}
 
 Return 4 specific real titles they might want to capture next, mixed across
-[book, tv, movie, article, video, podcast]. Avoid duplicates of their library and dismissed.
+[book, tv, movie, article, video, podcast, music]. Avoid duplicates of their library and dismissed.
 Lean into the time of day: ${ed.label === 'morning' ? 'reading, contemplative' : ed.label === 'afternoon' ? 'mixed, productive' : ed.label === 'evening' ? 'date-night cinema, prestige tv' : 'shorter, quieter'}.
 
 Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
-[{"title":"...","type":"book|tv|movie|article|video|podcast","reason":"under 60 chars, lowercase, no period"}]`
+[{"title":"...","type":"book|tv|movie|article|video|podcast|music","reason":"under 60 chars, lowercase, no period"}]`
 
         const raw = await claudeComplete(prompt, { max_tokens: 600 })
         if (cancelled) return
@@ -428,7 +429,7 @@ Return ONLY a JSON array (no prose, no markdown), exactly 4 objects:
         const libTitlesL = new Set(items.map((i) => i.title.toLowerCase().trim()))
         const cleaned = Array.isArray(parsed) ? parsed.filter((s) =>
           s && typeof s.title === 'string' && s.title.length > 0
-          && ['book','tv','movie','article','video','podcast'].includes(s.type)
+          && ['book','tv','movie','article','video','podcast','music'].includes(s.type)
           && !libTitlesL.has(s.title.toLowerCase().trim())
           && !dismissed.has(s.title)
         ).slice(0, 4) : null

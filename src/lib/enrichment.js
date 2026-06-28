@@ -9,6 +9,7 @@ import { googleBooksLookup, googleBooksSearch } from './sources/googlebooks'
 import { openGraphLookup } from './sources/opengraph'
 import { tmdbLookup, tmdbSearch } from './sources/tmdb'
 import { youtubeLookup, youtubeSearch } from './sources/youtube'
+import { musicBrainzLookup, musicBrainzSearch } from './sources/musicbrainz'
 
 const URL_RE = /^https?:\/\//i
 
@@ -158,6 +159,30 @@ Return JSON with this exact shape:
   ]
 }
 ${SHARED_RULES}`,
+
+  music: (title) => `Enrich this music album or release: "${title}"
+
+Return JSON with this exact shape:
+{
+  "title": "official album title",
+  "synopsis": "2-3 sentences on the album / its significance",
+  "extension": {
+    "artist": "...",
+    "published_year": 0,
+    "label": "record label",
+    "track_count": 0,
+    "album_type": "Album | EP | Single | Compilation",
+    "genre": "..."
+  },
+  "image_tone": ["#hex", "#hex"],
+  "cover_kind": "art",
+  "links": [
+    { "label": "Spotify" },
+    { "label": "Apple Music" },
+    { "label": "Bandcamp" }
+  ]
+}
+${SHARED_RULES}`,
 }
 
 // Minimal fallback — all fields manually editable.
@@ -169,6 +194,7 @@ function fallbackCard(title, type) {
     article: ['#23252a', '#7a7d85'],
     video:   ['#2a1f1a', '#a3633a'],
     podcast: ['#1f1a2a', '#7a5aa3'],
+    music:   ['#1a2420', '#5aa37a'],
   }
   const links = {
     book:    [{ label: 'Libby' }, { label: 'Goodreads' }, { label: 'Bookshop' }],
@@ -177,9 +203,11 @@ function fallbackCard(title, type) {
     article: [{ label: 'Read' }],
     video:   [{ label: 'YouTube' }],
     podcast: [{ label: 'Apple Podcasts' }, { label: 'Spotify' }, { label: 'Overcast' }],
+    music:   [{ label: 'Spotify' }, { label: 'Apple Music' }, { label: 'Bandcamp' }],
   }
   const coverKind = type === 'video' ? 'thumb'
     : (type === 'movie' || type === 'tv') ? 'poster'
+    : type === 'music' ? 'art'
     : 'type'
   return {
     title,
@@ -258,7 +286,10 @@ function mergeOpenGraph(merged, og) {
 }
 
 // Merge TMDB results over Claude's guesses for movie/tv. Real poster image is
-// the big win; canonical title/year/overview are also high-quality.
+// the big win; canonical title/year/overview/runtime/genres/director are also
+// high-quality hard facts. Defensive: every field guarded so a sparse result
+// (e.g. a search-only candidate with no detail call yet) never overwrites a
+// good Claude value with null. Synopsis prefers TMDB's overview, else Claude.
 function mergeTmdb(merged, tm, type) {
   if (!tm) return merged
   const ext = { ...merged.extension }
@@ -266,11 +297,23 @@ function mergeTmdb(merged, tm, type) {
     if (type === 'movie') ext.release_year = tm.year
     if (type === 'tv') ext.first_air_year = tm.year
   }
+  // Runtime maps to the per-type Claude field name.
+  if (tm.runtime) {
+    if (type === 'movie') ext.runtime_min = tm.runtime
+    if (type === 'tv') ext.runtime_per_ep = tm.runtime
+  }
+  // Genres: keep the full list AND a single-phrase genre for the card.
+  if (Array.isArray(tm.genres) && tm.genres.length) ext.genres = tm.genres
+  if (tm.genre) ext.genre = tm.genre
+  // Director (movie) / creator (tv) — only overwrite when TMDB has a value.
+  if (type === 'movie' && tm.director) ext.director = tm.director
+  if (type === 'tv' && tm.creator) ext.creator = tm.creator
   if (tm.tmdb_vote != null) ext.tmdb_vote = tm.tmdb_vote
   return {
     ...merged,
     title: tm.title || merged.title,
-    synopsis: merged.synopsis || tm.synopsis || '',
+    // Synopsis: prefer TMDB overview when present, else keep Claude's.
+    synopsis: tm.synopsis || merged.synopsis || '',
     extension: ext,
     image_url: tm.image_url || merged.image_url || null,
     _tmdbHit: !!tm.image_url,
@@ -295,6 +338,28 @@ function mergeYoutube(merged, yt) {
     image_url: yt.image_url || merged.image_url || null,
     links,
     _ytHit: true,
+  }
+}
+
+// Merge a MusicBrainz result (music) over Claude's guesses. Real cover art (via
+// the Cover Art Archive) is the big win; artist / year / label / track count /
+// album type are also more reliable from the database than Claude. Synopsis
+// stays Claude's wording (MusicBrainz has none). Defensive: every field guarded
+// so a sparse release-group never overwrites a good Claude value with null.
+function mergeMusicBrainz(merged, mb) {
+  if (!mb) return merged
+  const ext = { ...merged.extension }
+  if (mb.artist) ext.artist = mb.artist
+  if (mb.published_year) ext.published_year = mb.published_year
+  if (mb.label) ext.label = mb.label
+  if (mb.track_count) ext.track_count = mb.track_count
+  if (mb.album_type) ext.album_type = mb.album_type
+  return {
+    ...merged,
+    title: mb.title || merged.title,
+    extension: ext,
+    image_url: mb.image_url || merged.image_url || null,
+    _mbHit: !!mb.image_url,
   }
 }
 
@@ -346,6 +411,7 @@ async function gatherSources(type, input) {
   }
   if (type === 'article') return { og: await openGraphLookup(input).catch(() => null) }
   if (type === 'video') return { yt: await youtubeLookup(input).catch(() => null) }
+  if (type === 'music') return { mb: await musicBrainzLookup(input).catch(() => null) }
   return {}
 }
 
@@ -361,6 +427,7 @@ function applySources(merged, srcs, type) {
   if (srcs.tmdb) out = mergeTmdb(out, srcs.tmdb, type)
   if (srcs.jw) out = mergeJustWatch(out, srcs.jw, type)
   if (srcs.yt) out = mergeYoutube(out, srcs.yt)
+  if (srcs.mb) out = mergeMusicBrainz(out, srcs.mb)
   return out
 }
 
@@ -374,6 +441,7 @@ function applyLockedFacts(card, locked, type) {
   if (type === 'book') return mergeGoogleBooks(card, r)
   if (type === 'movie' || type === 'tv') return mergeTmdb(card, r, type)
   if (type === 'video') return mergeYoutube(card, r)
+  if (type === 'music') return mergeMusicBrainz(card, r)
   return card
 }
 
@@ -446,6 +514,8 @@ export async function searchCandidates(type, query) {
     raws = await tmdbSearch(q, type).catch(() => [])
   } else if (type === 'video') {
     raws = await youtubeSearch(q).catch(() => [])
+  } else if (type === 'music') {
+    raws = await musicBrainzSearch(q).catch(() => [])
   } else {
     return []
   }
@@ -486,6 +556,14 @@ function normalizeCandidate(r, type) {
       type, title: r.title, subtitle: r.channel || '', year: null,
       image_url: r.image_url || null,
       query: r.web_url || [r.title, r.channel].filter(Boolean).join(' '),
+      raw: r,
+    }
+  }
+  if (type === 'music') {
+    return {
+      type, title: r.title, subtitle: r.artist || '', year: r.published_year || null,
+      image_url: r.image_url || null,
+      query: [r.title, r.artist].filter(Boolean).join(' '),
       raw: r,
     }
   }

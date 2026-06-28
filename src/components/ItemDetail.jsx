@@ -175,6 +175,7 @@ export const ItemDetail = ({
   if (item.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (item.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
   if (item.type === 'podcast') meta.push(ext.host, ext.publisher, ext.cadence)
+  if (item.type === 'music') meta.push(ext.artist, ext.published_year, ext.label, ext.track_count && `${ext.track_count} tracks`)
 
   const setRating = (n) => {
     if (readOnly) return
