@@ -6,9 +6,10 @@ export const TYPE_META = {
   article: { label: 'Article', plural: 'Articles', spine: 'AR' },
   video:   { label: 'Video',   plural: 'Videos',   spine: 'VD' },
   podcast: { label: 'Podcast', plural: 'Podcasts', spine: 'PC' },
+  music:   { label: 'Music',   plural: 'Music',    spine: 'MU' },
 }
 
-export const TYPE_ORDER = ['book', 'tv', 'movie', 'article', 'video', 'podcast']
+export const TYPE_ORDER = ['book', 'tv', 'movie', 'article', 'video', 'podcast', 'music']
 
 // Defensive lookup — unknown types fall back to a neutral placeholder so the
 // renderer never throws on legacy data with surprise type values.

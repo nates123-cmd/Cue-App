@@ -22,7 +22,8 @@ import { supabase } from './supabase'
 function normalizeType(t) {
   if (!t) return 'article'
   if (t === 'film') return 'movie'
-  if (['book', 'tv', 'movie', 'article', 'video', 'podcast'].includes(t)) return t
+  if (t === 'album') return 'music'
+  if (['book', 'tv', 'movie', 'article', 'video', 'podcast', 'music'].includes(t)) return t
   return 'article'
 }
 

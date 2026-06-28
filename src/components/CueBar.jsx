@@ -122,12 +122,12 @@ PART A: For each item in their pre-filtered shortlist, write a one-line rational
 SHORTLIST: ${shortlistJson}
 
 PART B: Suggest 3 SPECIFIC real titles NOT in their library that satisfy the
-query. Mix types across [book, tv, movie, article, video, podcast].
+query. Mix types across [book, tv, movie, article, video, podcast, music].
 
 Return ONLY JSON (no prose, no markdown):
 {
   "rationales": [{ "id": "<id>", "why": "..." }, ...],
-  "ideas": [{ "title": "...", "type": "book|tv|movie|article|video|podcast", "reason": "..." }, ...]
+  "ideas": [{ "title": "...", "type": "book|tv|movie|article|video|podcast|music", "reason": "..." }, ...]
 }`
       const raw = await claudeComplete(prompt, { max_tokens: 800 })
       const parsed = extractJSON(raw) || {}
@@ -136,7 +136,7 @@ Return ONLY JSON (no prose, no markdown):
       const libTitles = new Set(items.map((i) => i.title.toLowerCase().trim()))
       const cleaned = Array.isArray(parsed.ideas) ? parsed.ideas.filter((s) =>
         s && typeof s.title === 'string' && s.title
-        && ['book','tv','movie','article','video','podcast'].includes(s.type)
+        && ['book','tv','movie','article','video','podcast','music'].includes(s.type)
         && !libTitles.has(s.title.toLowerCase().trim())
       ).slice(0, 3) : []
       setExpand(cleaned)
@@ -170,6 +170,7 @@ Return ONLY JSON (no prose, no markdown):
       article: ['#23252a', '#7a7d85'],
       video:   ['#2a1f1a', '#a3633a'],
       podcast: ['#1f1a2a', '#7a5aa3'],
+      music:   ['#1a2420', '#5aa37a'],
     }
     const draft = {
       title: idea.title, type: idea.type, status: 'queued',

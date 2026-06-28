@@ -44,6 +44,14 @@ export function TypeIcon({ type, size = 18, weight = 1.5 }) {
           <path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7" />
         </svg>
       )
+    case 'music':
+      return (
+        <svg viewBox="0 0 24 24" style={s}>
+          <path d="M9 17.5V6l10-2v11.5" />
+          <circle cx="6.5" cy="17.5" r="2.5" />
+          <circle cx="16.5" cy="15.5" r="2.5" />
+        </svg>
+      )
     default:
       return null
   }

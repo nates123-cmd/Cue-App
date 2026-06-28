@@ -107,9 +107,9 @@ describe('metaFor — defensive lookup (must never throw / never return undefine
 // (restaurants moved to Ink). Pin the actual shipped contract.
 // ---------------------------------------------------------------------------
 describe('type registry — TYPE_META / TYPE_ORDER', () => {
-  it('registry has exactly the six media types (restaurants moved to Ink; podcast added)', () => {
+  it('registry has exactly the seven media types (restaurants moved to Ink; podcast + music added)', () => {
     expect(Object.keys(TYPE_META).sort()).toEqual(
-      ['article', 'book', 'movie', 'podcast', 'tv', 'video'].sort()
+      ['article', 'book', 'movie', 'music', 'podcast', 'tv', 'video'].sort()
     )
   })
 
