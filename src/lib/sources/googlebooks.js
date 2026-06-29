@@ -48,7 +48,7 @@ export async function googleBooksLookup(title) {
   const t = (title || '').trim()
   if (!t) return null
   const isbn = asIsbn(t)
-  const q = isbn ? `isbn:${isbn}` : t
+  const q = isbn ? `isbn:${isbn}` : `intitle:${t}`
   try {
     const params = new URLSearchParams({ q, maxResults: '1', printType: 'books' })
     if (API_KEY) params.set('key', API_KEY)
@@ -67,7 +67,10 @@ export async function googleBooksSearch(title, n = 6) {
   const t = (title || '').trim()
   if (!t) return []
   const isbn = asIsbn(t)
-  const q = isbn ? `isbn:${isbn}` : t
+  // intitle: scopes to the title field. A bare `q` runs a full-text search, so
+  // a song-title-as-book like "Blank Space" matched any book *containing* those
+  // words (legal records, fill-in-the-blank forms) — 300 junk hits with a key.
+  const q = isbn ? `isbn:${isbn}` : `intitle:${t}`
   try {
     const params = new URLSearchParams({ q, maxResults: String(n), printType: 'books' })
     if (API_KEY) params.set('key', API_KEY)
