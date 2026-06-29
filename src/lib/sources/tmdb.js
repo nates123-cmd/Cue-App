@@ -128,3 +128,73 @@ export async function tmdbSearch(title, type, n = 6) {
     return []
   }
 }
+
+// ── recommendations engine helpers ───────────────────────────────────────────
+
+// Resolve a title to its TMDB id (search-only, cheap). Used when a candidate
+// arrived without an id (e.g. a Claude-proposed net-new title) and we need one
+// for /recommendations or /watch/providers. Returns null on miss / no key.
+export async function tmdbResolveId(title, type) {
+  const top = (await tmdbSearchResults(title, type, 1).catch(() => []))[0]
+  return top?.tmdb_id ?? null
+}
+
+// "More like this" candidates for a movie/tv id: TMDB's own /recommendations
+// (co-engagement based) plus /similar (metadata based), deduped. Each becomes a
+// normalized engine candidate carrying the hard facts TMDB already knows, so the
+// card renders rich without a follow-up detail call. Empty array on miss/no key.
+export async function tmdbRecommendations(id, type, n = 16) {
+  if (!API_KEY || id == null || !isType(type)) return []
+  const fetchList = async (kind) => {
+    const params = new URLSearchParams({ api_key: API_KEY, language: 'en-US', page: '1' })
+    const res = await fetch(`${BASE}/${type}/${id}/${kind}?${params}`).catch(() => null)
+    if (!res || !res.ok) return []
+    const data = await res.json().catch(() => null)
+    return data?.results || []
+  }
+  const [recs, similar] = await Promise.all([
+    fetchList('recommendations'),
+    fetchList('similar'),
+  ])
+  const seen = new Set()
+  const out = []
+  for (const r of [...recs, ...similar]) {
+    if (r?.id == null || seen.has(r.id)) continue
+    seen.add(r.id)
+    const f = resultToFacts(r, type)
+    if (!f?.title) continue
+    out.push({
+      title: f.title,
+      type,
+      source: 'tmdb',
+      facts: {
+        tmdb_id: f.tmdb_id,
+        synopsis: f.synopsis,
+        image_url: f.image_url,
+        genre: f.genre,
+        genres: f.genres,
+        tmdb_vote: f.tmdb_vote,
+        ...(type === 'movie' ? { release_year: f.year } : { first_air_year: f.year }),
+      },
+    })
+    if (out.length >= n) break
+  }
+  return out
+}
+
+// US streaming availability for a movie/tv id, sourced from TMDB's
+// /watch/providers (JustWatch data, no gated JustWatch API needed). Returns the
+// flatrate (subscription) provider names — "where can I watch" without a search
+// call. Empty array on miss / no key / nothing streaming.
+export async function tmdbWatchProviders(id, type, region = 'US') {
+  if (!API_KEY || id == null || !isType(type)) return []
+  const params = new URLSearchParams({ api_key: API_KEY })
+  const res = await fetch(`${BASE}/${type}/${id}/watch/providers?${params}`).catch(() => null)
+  if (!res || !res.ok) return []
+  const data = await res.json().catch(() => null)
+  const r = data?.results?.[region]
+  if (!r) return []
+  // flatrate = subscription streaming; fall back to free/ads, then rent/buy.
+  const tier = r.flatrate || r.free || r.ads || r.rent || r.buy || []
+  return tier.map((p) => p?.provider_name).filter(Boolean)
+}

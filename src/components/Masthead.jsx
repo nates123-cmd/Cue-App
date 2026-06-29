@@ -71,7 +71,7 @@ export const Masthead = ({ kicker, title, right }) => {
 
 export const BottomNav = ({ page, onChange, activeCount }) => {
   const items = [
-    { id: 'capture', label: 'Capture', glyph: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg> },
+    { id: 'recs', label: 'Recs', glyph: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l2.1 5.5L20 10l-5.9 1.5L12 17l-2.1-5.5L4 10l5.9-1.5z" /><path d="M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></svg> },
     { id: 'library', label: 'Library', glyph: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 5h6v14H4zM10 5h4v14h-4zM14 5l5 1.5-3 13.5-5-1.5" /></svg> },
     { id: 'active', label: 'Active', glyph: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="8" /></svg> },
   ]

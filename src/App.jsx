@@ -6,16 +6,17 @@ import { supabase } from './lib/supabase'
 import { backfillMissingImages } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
-import { CueBar } from './components/CueBar'
+import { CaptureSheet } from './components/CaptureSheet'
 import { FinishSheet } from './components/FinishSheet'
-import { CapturePage } from './pages/Capture'
+import { RecsPage } from './pages/Recs'
 import { LibraryPage } from './pages/Library'
 import { ActivePage } from './pages/Active'
 
 export default function App() {
   const [page, setPage] = useState('library')
   const [openItem, setOpenItem] = useState(null)
-  const [cueBarOpen, setCueBarOpen] = useState(false)
+  const [captureOpen, setCaptureOpen] = useState(false)
+  const [recsSeed, setRecsSeed] = useState(null) // { kind:'item', item } from "More like this"
   const [density, setDensity] = useState('grid')
   const [now, setNow] = useState(() => new Date())
   const [finishTarget, setFinishTarget] = useState(null) // item awaiting rating+notes
@@ -76,9 +77,15 @@ export default function App() {
   }
 
   // ── mutations ─────────────────────────────────────────────
-  const onAdd = async (draft) => {
-    await addItem(draft)
-    setPage('library')
+  // Used by both the Capture FAB sheet and the Recs "Queue" confirm. Stays on
+  // the current page (the FAB sheet closes itself; Recs keeps its batch up).
+  const onAdd = async (draft) => { await addItem(draft) }
+
+  // Open the Recs tab pre-seeded with this item ("More like this").
+  const onMoreLikeThis = (item) => {
+    setOpenItem(null)
+    setRecsSeed({ kind: 'item', item })
+    setPage('recs')
   }
 
   const onBump = async (item) => {
@@ -111,11 +118,6 @@ export default function App() {
     if (share_to_ink && note) {
       await shareReflectionToInk({ title: target.title, type: target.type, note })
     }
-  }
-
-  const onMarkSeen = async (item) => {
-    // Cue Bar swipe-left — no rating prompt, just log it.
-    await finishItem(item, { rating: null, note: null })
   }
 
   const onDelete = async (item) => deleteItem(item.id)
@@ -215,12 +217,14 @@ export default function App() {
         }} />
 
         <div style={{ position: 'relative', zIndex: 2, paddingBottom: 120 }}>
-          {page === 'capture' && (
-            <CapturePage
-              onAdd={onAdd}
-              onOpenCueBar={() => setCueBarOpen(true)}
-              recommenders={recommenders}
+          {page === 'recs' && (
+            <RecsPage
               items={items}
+              partner={PARTNER}
+              seed={recsSeed}
+              onClearSeed={() => setRecsSeed(null)}
+              onAdd={onAdd}
+              onOpenItem={setOpenItem}
             />
           )}
           {page === 'library' && (
@@ -273,18 +277,18 @@ export default function App() {
 
         <BottomNav page={page} onChange={setPage} activeCount={activeCount} />
 
-        {!cueBarOpen && !openItem && !finishTarget && (
-          <button onClick={() => setCueBarOpen(true)} style={{
+        {!captureOpen && !openItem && !finishTarget && (
+          <button onClick={() => setCaptureOpen(true)} style={{
             position: 'fixed', bottom: 'calc(92px + env(safe-area-inset-bottom, 0px))', right: 16, zIndex: 35,
             appearance: 'none', cursor: 'pointer',
-            padding: '11px 14px',
+            padding: '11px 16px',
             background: 'var(--signal)', color: 'var(--ink)',
             border: 0, borderRadius: 999,
             fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.14em',
             textTransform: 'uppercase', fontWeight: 600,
             boxShadow: '0 12px 24px -8px rgba(0,0,0,0.5)',
             display: 'inline-flex', alignItems: 'center', gap: 6,
-          }}>✦ Cue Bar</button>
+          }}>+ Capture</button>
         )}
 
         {openItem && (
@@ -298,21 +302,18 @@ export default function App() {
             onPromoteToLibrary={onPromoteToLibrary}
             onDelete={onDelete}
             onPushToRadarr={pushToRadarr}
+            onMoreLikeThis={onMoreLikeThis}
             partner={PARTNER}
             recommenders={recommenders}
           />
         )}
 
-        <CueBar
-          open={cueBarOpen}
-          onClose={() => setCueBarOpen(false)}
-          items={items}
-          partner={PARTNER}
-          edition={edition.label}
-          onOpenItem={(i) => { setCueBarOpen(false); setOpenItem(i) }}
+        <CaptureSheet
+          open={captureOpen}
+          onClose={() => setCaptureOpen(false)}
           onAdd={onAdd}
-          onMarkSeen={onMarkSeen}
-          onDelete={onDelete}
+          recommenders={recommenders}
+          partner={PARTNER}
         />
 
         <FinishSheet

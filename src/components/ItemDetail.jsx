@@ -119,7 +119,7 @@ const TagEditor = ({ tags = [], onChange }) => {
 
 export const ItemDetail = ({
   item, onClose, onChangeStatus, onToggleWith,
-  onPatch, onRequestFinish, onPromoteToLibrary, onDelete, onPushToRadarr,
+  onPatch, onRequestFinish, onPromoteToLibrary, onDelete, onPushToRadarr, onMoreLikeThis,
   partner = 'Amanda', recommenders = [],
 }) => {
   if (!item) return null
@@ -236,20 +236,29 @@ export const ItemDetail = ({
             </div>
           </div>
 
-          {!readOnly && (
-            <button onClick={runEnrich} disabled={enriching} style={{
-              ...btnGhost, alignSelf: 'flex-start',
-              opacity: enriching ? 0.6 : 1,
-              cursor: enriching ? 'wait' : 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-            }}>
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', background: 'var(--signal)',
-                animation: enriching ? 'pulse-now 1s ease-in-out infinite' : 'none',
-              }} />
-              {enriching ? 'Enriching…' : '✦ Enrich — cover + where to watch'}
-            </button>
-          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {!readOnly && (
+              <button onClick={runEnrich} disabled={enriching} style={{
+                ...btnGhost,
+                opacity: enriching ? 0.6 : 1,
+                cursor: enriching ? 'wait' : 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%', background: 'var(--signal)',
+                  animation: enriching ? 'pulse-now 1s ease-in-out infinite' : 'none',
+                }} />
+                {enriching ? 'Enriching…' : '✦ Enrich — cover + where to watch'}
+              </button>
+            )}
+            {onMoreLikeThis && (
+              <button onClick={() => onMoreLikeThis(item)} style={{
+                ...btnGhost, display: 'inline-flex', alignItems: 'center', gap: 7,
+              }}>
+                <span style={{ fontSize: 11 }}>✦</span> More like this
+              </button>
+            )}
+          </div>
 
           {(item.type === 'movie' || item.type === 'tv') && onPushToRadarr && (
             <button onClick={runPush} disabled={pushState === 'pushing' || pushState === 'sent'} style={{
