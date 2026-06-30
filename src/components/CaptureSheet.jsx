@@ -91,7 +91,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
           <button onClick={onClose} style={{ ...btnGhost, padding: '4px 8px', fontSize: 9 }}>Close</button>
         </div>
 
-        <div style={{ padding: '6px 20px 32px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: '6px 20px 32px', overflowY: 'auto', WebkitOverflowScrolling: 'touch', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', gap: 6 }}>
             {[['single', 'One at a time'], ['bulk', 'Bulk import']].map(([m, label]) => (
               <button key={m} onClick={() => setMode(m)} style={{
