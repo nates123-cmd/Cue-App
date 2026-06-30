@@ -187,10 +187,10 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
 // Shown above the draft when a title has 2+ distinct matches. Tap a row to
 // re-enrich locked to that exact item — fixes "searched Playground, got the
 // wrong one."
-export const MatchPicker = ({ candidates, pickedKey, busy, onPick, onDismiss }) => (
+export const MatchPicker = ({ candidates, pickedKey, busy, showType = false, onPick, onDismiss }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <Mono size={9} style={{ color: 'var(--signal)' }}>More than one match</Mono>
+      <Mono size={9} style={{ color: 'var(--signal)' }}>{showType ? 'Best matches across types' : 'More than one match'}</Mono>
       <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
       <button onClick={onDismiss} disabled={busy} title="Back to search" style={{
         appearance: 'none', cursor: busy ? 'wait' : 'pointer', background: 'transparent',
@@ -235,9 +235,18 @@ export const MatchPicker = ({ candidates, pickedKey, busy, onPick, onDismiss }) 
               )}
             </div>
             <span style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4,
               fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.14em', textTransform: 'uppercase',
               color: active ? 'var(--signal)' : 'var(--muted)',
-            }}>{active ? 'shown' : 'use'}</span>
+            }}>
+              {showType && (
+                <span style={{
+                  padding: '2px 5px', borderRadius: 2, background: 'var(--paper-soft)',
+                  border: '1px solid var(--hairline)', color: 'var(--text)', fontSize: 8,
+                }}>{TYPE_META[c.type]?.label || c.type}</span>
+              )}
+              <span>{active ? 'shown' : 'use'}</span>
+            </span>
           </button>
         )
       })}

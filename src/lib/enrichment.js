@@ -533,6 +533,49 @@ export async function searchCandidates(type, query) {
   return out
 }
 
+// Auto/type-agnostic candidate search. The user hasn't told us what kind of
+// thing this is, so we search the popular media types in parallel and let them
+// pick. Each source returns its hits already ordered by popularity/relevance;
+// we interleave across types (round-robin by rank) so the picker shows a spread
+// — most-popular movie, top show, top book… — instead of all movies first.
+// URLs are exact (an article/video link), so auto returns [].
+export async function searchCandidatesAuto(query) {
+  const q = (query || '').trim()
+  if (!q || URL_RE.test(q)) return []
+
+  const [movie, tv, book, music] = await Promise.all([
+    tmdbSearch(q, 'movie').catch(() => []),
+    tmdbSearch(q, 'tv').catch(() => []),
+    googleBooksSearch(q).catch(() => []).then((gb) => gb.length ? gb : openLibrarySearch(q).catch(() => [])),
+    musicBrainzSearch(q).catch(() => []),
+  ])
+
+  // Normalize each source's hits, tagged with their type.
+  const lanes = [
+    movie.map((r) => normalizeCandidate(r, 'movie')),
+    tv.map((r) => normalizeCandidate(r, 'tv')),
+    book.map((r) => normalizeCandidate(r, 'book')),
+    music.map((r) => normalizeCandidate(r, 'music')),
+  ].map((lane) => lane.filter(Boolean))
+
+  // Round-robin interleave across lanes for a cross-type spread.
+  const seen = new Set()
+  const out = []
+  const maxLen = Math.max(0, ...lanes.map((l) => l.length))
+  for (let i = 0; i < maxLen && out.length < 8; i++) {
+    for (const lane of lanes) {
+      if (out.length >= 8) break
+      const norm = lane[i]
+      if (!norm) continue
+      const key = `${norm.type}|${norm.title.toLowerCase().trim()}|${(norm.subtitle || '').toLowerCase().trim()}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ ...norm, key })
+    }
+  }
+  return out
+}
+
 function normalizeCandidate(r, type) {
   if (!r || !r.title) return null
   if (type === 'book') {

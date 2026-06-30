@@ -11,19 +11,21 @@ import { BulkImport } from './BulkImport'
 import { DraftCard, MatchPicker, Enriching, TypeChip } from '../pages/Capture'
 import { TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
-import { enrich, searchCandidates } from '../lib/enrichment'
+import { enrich, searchCandidates, searchCandidatesAuto } from '../lib/enrichment'
 
 export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner = 'Amanda' }) => {
   const ed = useEdition()
   const [mode, setMode] = useState('single')      // single | bulk
   const [title, setTitle] = useState('')
   const [type, setType] = useState('book')
+  const [auto, setAuto] = useState(true)           // Auto = search across all media types, pick locks the type
   const [recommendedBy, setRecommendedBy] = useState('me')
   const [withPartner, setWithPartner] = useState(false)
-  const [phase, setPhase] = useState('idle')       // idle | enriching | draft
+  const [phase, setPhase] = useState('idle')       // idle | picking | enriching | draft
   const [draft, setDraft] = useState(null)
   const [candidates, setCandidates] = useState([])
   const [pickedKey, setPickedKey] = useState(null)
+  const [autoMiss, setAutoMiss] = useState(false)  // Auto search returned nothing → prompt to pick a type
   // iOS soft keyboard overlays fixed-bottom elements. Track visualViewport so
   // the sheet lifts above the keyboard and caps its height to the visible area,
   // keeping the type chips + Enrich button reachable (scroll handles the rest).
@@ -45,8 +47,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   // Reset everything when the sheet closes.
   useEffect(() => {
     if (!open) {
-      setMode('single'); setTitle(''); setType('book'); setRecommendedBy('me')
-      setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null)
+      setMode('single'); setTitle(''); setType('book'); setAuto(true); setRecommendedBy('me')
+      setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
     }
   }, [open])
 
@@ -60,7 +62,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   const submit = async () => {
     const q = title.trim()
     if (!q) return
-    setPhase('enriching'); setDraft(null); setCandidates([]); setPickedKey(null)
+    if (auto) return submitAuto(q)
+    setPhase('enriching'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
     const [enriched, cands] = await Promise.all([
       enrich(q, type),
       searchCandidates(type, q).catch(() => []),
@@ -70,15 +73,25 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
     if (cands.length >= 2) { setCandidates(cands); setPickedKey(cands[0].key) }
   }
 
+  // Auto: search across media types, show the cross-type picker, no draft yet —
+  // the type is unknown until a candidate is picked. A miss prompts a type pick.
+  const submitAuto = async (q) => {
+    setPhase('picking'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
+    const cands = await searchCandidatesAuto(q).catch(() => [])
+    if (cands.length) { setCandidates(cands); setPhase('picking') }
+    else { setPhase('idle'); setAutoMiss(true) }
+  }
+
   const pickCandidate = async (cand) => {
-    if (cand.key === pickedKey) return
-    setPickedKey(cand.key); setPhase('enriching'); setDraft(null)
-    const enriched = await enrich(cand.title, type, cand)
+    if (cand.key === pickedKey && phase === 'draft') return
+    setPickedKey(cand.key); setType(cand.type); setPhase('enriching'); setDraft(null)
+    const enriched = await enrich(cand.title, cand.type, cand)
     setDraft(decorate(enriched)); setPhase('draft')
   }
 
-  const backToEdit = () => { setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null) }
-  const resetForAnother = () => { setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false); setCandidates([]); setPickedKey(null) }
+  const backToEdit = () => { setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false) }
+  const resetForAnother = () => { setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false); setCandidates([]); setPickedKey(null); setAutoMiss(false) }
+  const chooseType = (t) => { setAuto(false); setType(t); setAutoMiss(false) }
   const confirm = () => { onAdd(draft); onClose() }
 
   return (
@@ -133,8 +146,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
                 <Mono size={9} dim>Title or URL</Mono>
                 <input
                   value={title}
-                  onFocus={() => { if (phase === 'draft') backToEdit() }}
-                  onChange={(e) => { if (phase === 'draft') backToEdit(); setTitle(e.target.value) }}
+                  onFocus={() => { if (phase === 'draft' || phase === 'picking') backToEdit() }}
+                  onChange={(e) => { if (phase === 'draft' || phase === 'picking') backToEdit(); setTitle(e.target.value) }}
                   onKeyDown={(e) => e.key === 'Enter' && submit()}
                   placeholder="Severance · Past Lives · The Overstory…"
                   style={{
@@ -143,11 +156,29 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
                     color: 'var(--text)', padding: 0, width: '100%',
                   }}
                 />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 4 }}>
+                <button onClick={() => { setAuto(true); setAutoMiss(false) }} style={{
+                  appearance: 'none', cursor: 'pointer', width: '100%', marginTop: 4,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 4px',
+                  background: auto ? 'color-mix(in oklab, var(--signal) 14%, var(--paper))' : 'transparent',
+                  border: `1px solid ${auto ? 'var(--signal)' : 'var(--hairline)'}`, borderRadius: 3,
+                  color: auto ? 'var(--text)' : 'var(--muted)', transition: 'all 160ms ease',
+                }}>
+                  <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 15, lineHeight: 0.8, color: auto ? 'var(--signal)' : 'var(--muted)' }}>✦</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Auto · best match</span>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
+                  <Mono size={8} dim>{auto ? 'or pick a type' : 'type'}</Mono>
+                  <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, opacity: auto ? 0.5 : 1, transition: 'opacity 160ms' }}>
                   {TYPE_ORDER.map((t) => (
-                    <TypeChip key={t} type={t} active={type === t} onClick={() => setType(t)} />
+                    <TypeChip key={t} type={t} active={!auto && type === t} onClick={() => chooseType(t)} />
                   ))}
                 </div>
+                {autoMiss && (
+                  <Mono size={9} style={{ color: 'var(--signal)' }}>No popular match — pick a type above, then Enrich.</Mono>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
                   <Mono size={9} dim>From</Mono>
                   <RecommenderPicker value={recommendedBy} onChange={setRecommendedBy} recommenders={recommenders} />
@@ -163,12 +194,12 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{partner}</span>
                   </button>
                   <span style={{ flex: 1 }} />
-                  <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>Enrich ↵</button>
+                  <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>{phase === 'picking' ? 'Searching…' : auto ? 'Match ↵' : 'Enrich ↵'}</button>
                 </div>
               </div>
 
-              {candidates.length > 1 && (phase === 'draft' || phase === 'enriching') && (
-                <MatchPicker candidates={candidates} pickedKey={pickedKey} busy={phase === 'enriching'} onPick={pickCandidate} onDismiss={backToEdit} />
+              {candidates.length > 0 && (phase === 'picking' || phase === 'draft' || phase === 'enriching') && (
+                <MatchPicker candidates={candidates} pickedKey={pickedKey} busy={phase === 'enriching'} showType={auto} onPick={pickCandidate} onDismiss={backToEdit} />
               )}
               {phase === 'enriching' && <Enriching title={title} />}
               {phase === 'draft' && draft && (
