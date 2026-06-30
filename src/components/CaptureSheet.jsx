@@ -24,6 +24,23 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   const [draft, setDraft] = useState(null)
   const [candidates, setCandidates] = useState([])
   const [pickedKey, setPickedKey] = useState(null)
+  // iOS soft keyboard overlays fixed-bottom elements. Track visualViewport so
+  // the sheet lifts above the keyboard and caps its height to the visible area,
+  // keeping the type chips + Enrich button reachable (scroll handles the rest).
+  const [vv, setVv] = useState({ inset: 0, height: 0 })
+
+  useEffect(() => {
+    const vp = typeof window !== 'undefined' && window.visualViewport
+    if (!vp) return
+    const onResize = () => {
+      const inset = Math.max(0, window.innerHeight - vp.height - vp.offsetTop)
+      setVv({ inset, height: vp.height })
+    }
+    onResize()
+    vp.addEventListener('resize', onResize)
+    vp.addEventListener('scroll', onResize)
+    return () => { vp.removeEventListener('resize', onResize); vp.removeEventListener('scroll', onResize) }
+  }, [])
 
   // Reset everything when the sheet closes.
   useEffect(() => {
@@ -71,12 +88,13 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
         opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none', transition: 'opacity 240ms ease',
       }} />
       <div style={{
-        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 90,
+        position: 'fixed', left: 0, right: 0, bottom: vv.inset, zIndex: 90,
         background: 'var(--paper)', borderTop: '1px solid var(--hairline-strong)',
         borderTopLeftRadius: 16, borderTopRightRadius: 16, boxShadow: '0 -20px 60px rgba(0,0,0,0.55)',
         transform: open ? 'translateY(0)' : 'translateY(110%)',
-        transition: 'transform 340ms cubic-bezier(0.2, 0.7, 0.2, 1)',
-        maxHeight: '90svh', display: 'flex', flexDirection: 'column',
+        transition: 'transform 340ms cubic-bezier(0.2, 0.7, 0.2, 1), bottom 160ms ease',
+        maxHeight: vv.inset > 0 && vv.height ? `${vv.height - 12}px` : '90svh',
+        display: 'flex', flexDirection: 'column',
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8 }}>
           <div style={{ width: 38, height: 3, borderRadius: 2, background: 'var(--hairline-strong)' }} />
