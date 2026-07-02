@@ -79,7 +79,7 @@ export default function App() {
   // ── mutations ─────────────────────────────────────────────
   // Used by both the Capture FAB sheet and the Recs "Queue" confirm. Stays on
   // the current page (the FAB sheet closes itself; Recs keeps its batch up).
-  const onAdd = async (draft) => { await addItem(draft) }
+  const onAdd = async (draft) => await addItem(draft)
 
   // Open the Recs tab pre-seeded with this item ("More like this").
   const onMoreLikeThis = (item) => {
@@ -312,6 +312,7 @@ export default function App() {
           open={captureOpen}
           onClose={() => setCaptureOpen(false)}
           onAdd={onAdd}
+          onPushToRadarr={pushToRadarr}
           recommenders={recommenders}
           partner={PARTNER}
         />

@@ -13,7 +13,7 @@ import { TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 import { enrich, searchCandidates, searchCandidatesAuto } from '../lib/enrichment'
 
-export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner = 'Amanda' }) => {
+export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommenders = [], partner = 'Amanda' }) => {
   const ed = useEdition()
   const [mode, setMode] = useState('single')      // single | bulk
   const [title, setTitle] = useState('')
@@ -29,6 +29,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   const [enrichingTitle, setEnrichingTitle] = useState('')  // title shown in the enrich popup
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState(null)
+  const [pushState, setPushState] = useState(null)  // null | pushing | sent | error
   // iOS soft keyboard overlays fixed-bottom elements. Track visualViewport so
   // the sheet lifts above the keyboard and caps its height to the visible area,
   // keeping the type chips + Enrich button reachable (scroll handles the rest).
@@ -52,7 +53,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
     if (!open) {
       setMode('single'); setTitle(''); setType('book'); setAuto(true); setRecommendedBy('me')
       setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
-      setEnrichingTitle(''); setSaving(false); setSaveErr(null)
+      setEnrichingTitle(''); setSaving(false); setSaveErr(null); setPushState(null)
     }
   }, [open])
 
@@ -99,12 +100,24 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   const resetForAnother = () => { setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false); setCandidates([]); setPickedKey(null); setAutoMiss(false); setSaveErr(null) }
   const chooseType = (t) => { setAuto(false); setType(t); setAutoMiss(false) }
   // Back out of the enriched popup to the results list without losing the search.
-  const closeDraft = () => { setPhase(candidates.length ? 'picking' : 'idle'); setDraft(null); setPickedKey(candidates.length ? pickedKey : null); setSaveErr(null) }
+  const closeDraft = () => { setPhase(candidates.length ? 'picking' : 'idle'); setDraft(null); setPickedKey(candidates.length ? pickedKey : null); setSaveErr(null); setPushState(null) }
   const confirm = async () => {
     if (saving) return
     setSaving(true); setSaveErr(null)
     try { await onAdd(draft); onClose() }
     catch (e) { setSaveErr(e?.message || 'Could not save — try again.'); setSaving(false) }
+  }
+  // Movie/TV only: save to the queue AND request the download on the home *arr
+  // stack (Radarr/Sonarr). Push needs a saved item (tmdb_id/year live on it).
+  const pushToRadarr = async () => {
+    if (!onPushToRadarr || saving || pushState === 'pushing' || pushState === 'sent') return
+    setPushState('pushing'); setSaveErr(null)
+    try {
+      const item = await onAdd(draft)
+      await onPushToRadarr(item || draft)
+      setPushState('sent')
+      setTimeout(onClose, 1000)
+    } catch (e) { setSaveErr(e?.message || 'Push failed — try again.'); setPushState('error') }
   }
 
   return (
@@ -240,7 +253,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
             }}>
               {phase === 'enriching'
                 ? <Enriching title={enrichingTitle || title} />
-                : <DraftCard draft={draft} onChange={setDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} />}
+                : <DraftCard draft={draft} onChange={setDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} onPush={onPushToRadarr ? pushToRadarr : null} pushState={pushState} />}
             </div>
           </div>
         </>

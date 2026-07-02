@@ -63,7 +63,7 @@ export const Enriching = ({ title }) => (
   </div>
 )
 
-export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false, error = null, onBack }) => {
+export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false, error = null, onBack, onPush = null, pushState = null }) => {
   const ext = draft.extension || {}
   const patch = (k, v) => onChange && onChange({ ...draft, [k]: v })
   const patchEnrichment = (v) => onChange && onChange({
@@ -177,9 +177,23 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
           {error && (
             <Mono size={9} style={{ color: 'var(--signal)', marginBottom: 8 }}>{error}</Mono>
           )}
+          {onPush && (draft.type === 'movie' || draft.type === 'tv') && (() => {
+            const arr = draft.type === 'tv' ? 'Sonarr' : 'Radarr'
+            const pushing = pushState === 'pushing', sent = pushState === 'sent'
+            return (
+              <button onClick={onPush} disabled={busy || pushing || sent} style={{
+                ...btnGhost, width: '100%', marginBottom: 8,
+                cursor: pushing ? 'wait' : sent ? 'default' : 'pointer',
+                opacity: pushing ? 0.6 : 1,
+                ...(sent ? { borderColor: 'var(--signal)', color: 'var(--signal)' } : {}),
+              }}>
+                {pushing ? 'Sending…' : sent ? `Queued in ${arr} ✓` : `Add & push to ${arr}`}
+              </button>
+            )
+          })()}
           <div style={{ display: 'flex', gap: 8, paddingTop: 4, borderTop: '1px solid var(--hairline)', marginTop: 4 }}>
             <button onClick={onBack || onAnother} style={{ ...btnGhost, flex: 1, marginTop: 12 }}>{onBack ? 'Back' : 'Capture another'}</button>
-            <button onClick={onConfirm} disabled={busy} style={{ ...btnPrimary, flex: 1.4, marginTop: 12, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>{busy ? 'Adding…' : 'Confirm · Queue'}</button>
+            <button onClick={onConfirm} disabled={busy} style={{ ...btnPrimary, flex: 1.4, marginTop: 12, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>{busy ? 'Adding…' : 'Add to Queue'}</button>
           </div>
         </FieldReveal>
       </div>
