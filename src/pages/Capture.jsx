@@ -63,7 +63,7 @@ export const Enriching = ({ title }) => (
   </div>
 )
 
-export const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
+export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false, error = null, onBack }) => {
   const ext = draft.extension || {}
   const patch = (k, v) => onChange && onChange({ ...draft, [k]: v })
   const patchEnrichment = (v) => onChange && onChange({
@@ -174,9 +174,12 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother }) => {
           </FieldReveal>
         )}
         <FieldReveal delay={780}>
+          {error && (
+            <Mono size={9} style={{ color: 'var(--signal)', marginBottom: 8 }}>{error}</Mono>
+          )}
           <div style={{ display: 'flex', gap: 8, paddingTop: 4, borderTop: '1px solid var(--hairline)', marginTop: 4 }}>
-            <button onClick={onAnother} style={{ ...btnGhost, flex: 1, marginTop: 12 }}>Capture another</button>
-            <button onClick={onConfirm} style={{ ...btnPrimary, flex: 1.4, marginTop: 12 }}>Confirm · Queue</button>
+            <button onClick={onBack || onAnother} style={{ ...btnGhost, flex: 1, marginTop: 12 }}>{onBack ? 'Back' : 'Capture another'}</button>
+            <button onClick={onConfirm} disabled={busy} style={{ ...btnPrimary, flex: 1.4, marginTop: 12, opacity: busy ? 0.5 : 1, pointerEvents: busy ? 'none' : 'auto' }}>{busy ? 'Adding…' : 'Confirm · Queue'}</button>
           </div>
         </FieldReveal>
       </div>

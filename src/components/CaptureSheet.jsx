@@ -26,6 +26,9 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
   const [candidates, setCandidates] = useState([])
   const [pickedKey, setPickedKey] = useState(null)
   const [autoMiss, setAutoMiss] = useState(false)  // Auto search returned nothing → prompt to pick a type
+  const [enrichingTitle, setEnrichingTitle] = useState('')  // title shown in the enrich popup
+  const [saving, setSaving] = useState(false)
+  const [saveErr, setSaveErr] = useState(null)
   // iOS soft keyboard overlays fixed-bottom elements. Track visualViewport so
   // the sheet lifts above the keyboard and caps its height to the visible area,
   // keeping the type chips + Enrich button reachable (scroll handles the rest).
@@ -49,6 +52,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
     if (!open) {
       setMode('single'); setTitle(''); setType('book'); setAuto(true); setRecommendedBy('me')
       setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
+      setEnrichingTitle(''); setSaving(false); setSaveErr(null)
     }
   }, [open])
 
@@ -63,6 +67,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
     const q = title.trim()
     if (!q) return
     if (auto) return submitAuto(q)
+    setEnrichingTitle(q); setSaveErr(null)
     setPhase('enriching'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
     const [enriched, cands] = await Promise.all([
       enrich(q, type),
@@ -84,15 +89,23 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
 
   const pickCandidate = async (cand) => {
     if (cand.key === pickedKey && phase === 'draft') return
+    setEnrichingTitle(cand.title); setSaveErr(null)
     setPickedKey(cand.key); setType(cand.type); setPhase('enriching'); setDraft(null)
     const enriched = await enrich(cand.title, cand.type, cand)
     setDraft(decorate(enriched)); setPhase('draft')
   }
 
-  const backToEdit = () => { setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false) }
-  const resetForAnother = () => { setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false); setCandidates([]); setPickedKey(null); setAutoMiss(false) }
+  const backToEdit = () => { setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false); setSaveErr(null) }
+  const resetForAnother = () => { setTitle(''); setDraft(null); setPhase('idle'); setWithPartner(false); setCandidates([]); setPickedKey(null); setAutoMiss(false); setSaveErr(null) }
   const chooseType = (t) => { setAuto(false); setType(t); setAutoMiss(false) }
-  const confirm = () => { onAdd(draft); onClose() }
+  // Back out of the enriched popup to the results list without losing the search.
+  const closeDraft = () => { setPhase(candidates.length ? 'picking' : 'idle'); setDraft(null); setPickedKey(candidates.length ? pickedKey : null); setSaveErr(null) }
+  const confirm = async () => {
+    if (saving) return
+    setSaving(true); setSaveErr(null)
+    try { await onAdd(draft); onClose() }
+    catch (e) { setSaveErr(e?.message || 'Could not save — try again.'); setSaving(false) }
+  }
 
   return (
     <>
@@ -201,10 +214,6 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
               {candidates.length > 0 && (phase === 'picking' || phase === 'draft' || phase === 'enriching') && (
                 <MatchPicker candidates={candidates} pickedKey={pickedKey} busy={phase === 'enriching'} showType={auto} onPick={pickCandidate} onDismiss={backToEdit} />
               )}
-              {phase === 'enriching' && <Enriching title={title} />}
-              {phase === 'draft' && draft && (
-                <DraftCard draft={draft} onChange={setDraft} onConfirm={confirm} onAnother={resetForAnother} />
-              )}
             </>
           )}
 
@@ -213,6 +222,29 @@ export const CaptureSheet = ({ open, onClose, onAdd, recommenders = [], partner 
           )}
         </div>
       </div>
+
+      {/* Enriched result pops up over the sheet — click a match, it lifts into a
+          focused card with the Confirm button front-and-center (no scroll hunt). */}
+      {(phase === 'enriching' || (phase === 'draft' && draft)) && (
+        <>
+          <div onClick={phase === 'draft' ? closeDraft : undefined} style={{
+            position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)',
+          }} />
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '20px 16px', pointerEvents: 'none',
+          }}>
+            <div onClick={(e) => e.stopPropagation()} style={{
+              width: '100%', maxWidth: 460, maxHeight: '88svh', overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+              pointerEvents: 'auto', animation: 'field-in 260ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards',
+            }}>
+              {phase === 'enriching'
+                ? <Enriching title={enrichingTitle || title} />
+                : <DraftCard draft={draft} onChange={setDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} />}
+            </div>
+          </div>
+        </>
+      )}
     </>
   )
 }
