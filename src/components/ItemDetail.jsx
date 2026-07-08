@@ -9,6 +9,7 @@ import {
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 import { enrich } from '../lib/enrichment'
+import { pushTarget } from '../lib/items'
 
 // Small uppercased mono chip rendered just above the synopsis. Picks up the
 // suite signal color so it reads like a press-tag editorial label.
@@ -260,7 +261,7 @@ export const ItemDetail = ({
             )}
           </div>
 
-          {(item.type === 'movie' || item.type === 'tv') && onPushToRadarr && (
+          {pushTarget(item.type) && onPushToRadarr && (
             <button onClick={runPush} disabled={pushState === 'pushing' || pushState === 'sent'} style={{
               ...btnGhost, alignSelf: 'flex-start',
               opacity: pushState === 'pushing' ? 0.6 : 1,
@@ -270,9 +271,9 @@ export const ItemDetail = ({
             }}>
               <span style={{ fontSize: 11 }}>➤</span>
               {pushState === 'pushing' ? 'Sending…'
-                : pushState === 'sent' ? `Queued in ${item.type === 'tv' ? 'Sonarr' : 'Radarr'} ✓`
+                : pushState === 'sent' ? `Queued in ${pushTarget(item.type).app} ✓`
                 : pushState === 'error' ? 'Failed — tap to retry'
-                : `Push to ${item.type === 'tv' ? 'Sonarr' : 'Radarr'}`}
+                : `Push to ${pushTarget(item.type).app}`}
             </button>
           )}
 

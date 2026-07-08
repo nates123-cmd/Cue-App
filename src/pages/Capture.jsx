@@ -7,6 +7,7 @@ import {
 } from '../components/primitives'
 import { EditableField } from '../components/EditableField'
 import { TYPE_META } from '../lib/meta'
+import { pushTarget } from '../lib/items'
 
 export const TypeChip = ({ type, active, onClick }) => (
   <button onClick={onClick} style={{
@@ -177,8 +178,8 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
           {error && (
             <Mono size={9} style={{ color: 'var(--signal)', marginBottom: 8 }}>{error}</Mono>
           )}
-          {onPush && (draft.type === 'movie' || draft.type === 'tv') && (() => {
-            const arr = draft.type === 'tv' ? 'Sonarr' : 'Radarr'
+          {onPush && pushTarget(draft.type) && (() => {
+            const arr = pushTarget(draft.type).app
             const pushing = pushState === 'pushing', sent = pushState === 'sent'
             return (
               <button onClick={onPush} disabled={busy || pushing || sent} style={{

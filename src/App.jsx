@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditionContext } from './lib/EditionContext'
 import { editionForHour, formatClock, PARTNER } from './lib/meta'
-import { useItems } from './lib/items'
+import { useItems, pushTarget } from './lib/items'
 import { supabase } from './lib/supabase'
 import { backfillMissingImages } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
@@ -171,18 +171,24 @@ export default function App() {
 
   const onFinishFromActive = async (item) => onRequestFinish(item)
 
-  // Cross-system hook: queue a movie/TV item for download on the home *arr stack.
-  // Writes a media_requests row; a poller on the Beelink picks it up (Radarr/Sonarr).
+  // Cross-system hook: queue an item for download on the home *arr stack.
+  // Writes a media_requests row; a poller on the Beelink picks it up and routes
+  // by media_type (movie→Radarr, tv→Sonarr, book→Prowler). Books carry no
+  // tmdb_id, so the author is packed into `detail` to help the book resolver.
   // user_id is filled by the DB default (auth.uid()); RLS scopes it to this user.
   const pushToRadarr = async (item) => {
+    const target = pushTarget(item.type)
+    if (!target) throw new Error(`No download target for ${item.type}`)
     const ext = item.extension || {}
     const tmdbId = ext.tmdb_id ? Number(ext.tmdb_id) : null
     const year = ext.release_year || ext.first_air_year || ext.published_year || null
     const { error } = await supabase.from('media_requests').insert({
-      media_type: item.type === 'tv' ? 'tv' : 'movie',
-      tmdb_id: Number.isFinite(tmdbId) ? tmdbId : null,
+      media_type: target.media_type,
+      tmdb_id: item.type === 'book' || !Number.isFinite(tmdbId) ? null : tmdbId,
       title: item.title,
       year: year ? Number(year) : null,
+      detail: item.type === 'book' && ext.author ? JSON.stringify({ author: ext.author }) : null,
+      source_app: 'cue',
     })
     if (error) throw error
   }

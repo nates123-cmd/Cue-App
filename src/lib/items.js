@@ -27,6 +27,17 @@ function normalizeType(t) {
   return 'article'
 }
 
+// Cross-system download push: which home *arr app handles a given Cue type.
+// movie→Radarr, tv→Sonarr, book→Prowler. Returns null for types with no
+// download target. `media_type` is the value written to the `media_requests`
+// row the Beelink poller reads to route the request.
+export function pushTarget(type) {
+  if (type === 'movie') return { app: 'Radarr', media_type: 'movie' }
+  if (type === 'tv') return { app: 'Sonarr', media_type: 'tv' }
+  if (type === 'book') return { app: 'Prowler', media_type: 'book' }
+  return null
+}
+
 function normalizeStatus(s, finishedAt) {
   if (finishedAt) return 'done'
   if (s === 'done' || s === 'finished') return 'done'
