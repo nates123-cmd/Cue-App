@@ -118,7 +118,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
     statusFilter !== 'open' && { key: 'status', label: statusFilter, clear: () => setStatusFilter('open') },
     lengthFilter !== 'all' && { key: 'length', label: lengthFilter, clear: () => setLengthFilter('all') },
     from !== 'all' && { key: 'from', label: `from ${from}`, clear: () => setFrom('all') },
-    together === 'with' && { key: 'with', label: `with ${partner}`, clear: () => setTogether('all') },
+    together === 'with' && { key: 'with', label: 'Nate and Amanda', clear: () => setTogether('all') },
     together === 'solo' && { key: 'solo', label: 'solo', clear: () => setTogether('all') },
     genreFilter !== 'all' && { key: 'genre', label: genreFilter, clear: () => setGenreFilter('all') },
   ].filter(Boolean)
@@ -136,7 +136,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <button
               onClick={() => setTogether(together === 'with' ? 'all' : 'with')}
-              title={together === 'with' ? `Showing items with ${partner}` : `Filter to items with ${partner}`}
+              title={together === 'with' ? 'Showing Nate and Amanda items' : 'Filter to Nate and Amanda items'}
               style={{
                 appearance: 'none', cursor: 'pointer',
                 width: 26, height: 26, padding: 0, borderRadius: '50%',
@@ -254,7 +254,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
                 display: 'inline-flex', alignItems: 'center', gap: 5,
               }}>
                 <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 12, lineHeight: 0.7, transform: 'translateY(-1px)' }}>&amp;</span>
-                {partner}
+                Nate and Amanda
               </button>
             </div>
 
