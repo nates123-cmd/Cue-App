@@ -8,6 +8,7 @@ import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CaptureSheet } from './components/CaptureSheet'
 import { FinishSheet } from './components/FinishSheet'
+import { DownloadTray } from './components/DownloadTray'
 import { RecsPage } from './pages/Recs'
 import { LibraryPage } from './pages/Library'
 import { ActivePage } from './pages/Active'
@@ -252,6 +253,8 @@ export default function App() {
             />
           )}
         </div>
+
+        <DownloadTray />
 
         {loading && items.length === 0 && (
           <div style={{
