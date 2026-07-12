@@ -134,19 +134,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
         title="The Collection"
         right={
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <button
-              onClick={() => setTogether(together === 'with' ? 'all' : 'with')}
-              title={together === 'with' ? 'Showing Nate and Amanda items' : 'Filter to Nate and Amanda items'}
-              style={{
-                appearance: 'none', cursor: 'pointer',
-                width: 26, height: 26, padding: 0, borderRadius: '50%',
-                background: together === 'with' ? 'var(--signal)' : 'transparent',
-                color: together === 'with' ? 'var(--ink)' : 'var(--text-soft)',
-                border: `1px solid ${together === 'with' ? 'var(--signal)' : 'var(--hairline-strong)'}`,
-                fontFamily: 'var(--display)', fontStyle: 'italic',
-                fontSize: 16, lineHeight: 1,
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              }}>&amp;</button>
+            {/* the "&" (Nate and Amanda) toggle lives in Filters now — no duplicate here */}
             <button onClick={() => onSetDensity(density === 'grid' ? 'list' : 'grid')} style={{
               ...btnGhost, padding: '4px 8px', fontSize: 9,
             }}>{density === 'grid' ? '☷ List' : '▦ Grid'}</button>

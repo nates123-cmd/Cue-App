@@ -8,7 +8,6 @@ import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CaptureSheet } from './components/CaptureSheet'
 import { FinishSheet } from './components/FinishSheet'
-import { DownloadTray } from './components/DownloadTray'
 import { RecsPage } from './pages/Recs'
 import { LibraryPage } from './pages/Library'
 import { ActivePage } from './pages/Active'
@@ -183,6 +182,19 @@ export default function App() {
     const ext = item.extension || {}
     const tmdbId = ext.tmdb_id ? Number(ext.tmdb_id) : null
     const year = ext.release_year || ext.first_air_year || ext.published_year || null
+
+    // Don't queue the same title twice. Radarr answers "already in Radarr" on a
+    // re-push, so the second row never gets an arr_id and would sit on
+    // "Searching" forever as a duplicate. Delete the row from the tray to re-push.
+    const { data: existing } = await supabase
+      .from('media_requests')
+      .select('id')
+      .eq('media_type', target.media_type)
+      .eq('title', item.title)
+      .neq('status', 'failed')
+      .limit(1)
+    if (existing && existing.length > 0) return { duplicate: true }
+
     const { error } = await supabase.from('media_requests').insert({
       media_type: target.media_type,
       tmdb_id: item.type === 'book' || !Number.isFinite(tmdbId) ? null : tmdbId,
@@ -191,7 +203,12 @@ export default function App() {
       detail: item.type === 'book' && ext.author ? JSON.stringify({ author: ext.author }) : null,
       source_app: 'cue',
     })
-    if (error) throw error
+    // 23505 = the unique index caught a double-tap that raced the check above.
+    if (error) {
+      if (error.code === '23505') return { duplicate: true }
+      throw error
+    }
+    return { duplicate: false }
   }
 
   const signOut = () => supabase.auth.signOut()
@@ -253,8 +270,6 @@ export default function App() {
             />
           )}
         </div>
-
-        <DownloadTray />
 
         {loading && items.length === 0 && (
           <div style={{

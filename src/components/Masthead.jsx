@@ -1,5 +1,6 @@
 import { useEdition } from '../lib/EditionContext'
 import { Mono } from './primitives'
+import { DownloadTray } from './DownloadTray'
 
 const EditionGlyph = ({ edition, size = 11 }) => {
   const stroke = 'currentColor'
@@ -57,6 +58,7 @@ export const Masthead = ({ kicker, title, right }) => {
           }}>
             <EditionGlyph edition={ed.edition} size={11} />
           </span>
+          <DownloadTray />
           {right}
         </div>
       </div>

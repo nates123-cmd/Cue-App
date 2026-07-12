@@ -53,6 +53,37 @@ export function statusView(row) {
   }
 }
 
+// How "real" a row is. Pushing the same title twice leaves a zombie row —
+// Radarr answers "already in Radarr" so it never gets an arr_id and would sit on
+// "Searching" forever. Collapse duplicates by title+type and keep the row that
+// actually tracks a download (has arr_id, furthest along).
+const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, pending: 1, failed: 0 }
+
+function score(row) {
+  const d = parseDetail(row.detail)
+  return (d.arr_id != null ? 10 : 0) + (STATUS_RANK[row.status] ?? 0)
+}
+
+// Returns one display row per title, carrying every underlying id in `ids` so a
+// swipe-delete removes the duplicates too.
+export function dedupeRows(rows) {
+  const groups = new Map()
+  for (const r of rows) {
+    const key = `${(r.title || '').toLowerCase()}|${r.media_type}`
+    const g = groups.get(key)
+    if (!g) {
+      groups.set(key, { ...r, ids: [r.id] })
+      continue
+    }
+    g.ids.push(r.id)
+    if (score(r) > score(g)) {
+      const ids = g.ids
+      groups.set(key, { ...r, ids })
+    }
+  }
+  return [...groups.values()]
+}
+
 export function useDownloads() {
   const [rows, setRows] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -71,10 +102,18 @@ export function useDownloads() {
         const ts = r.processed_at || r.requested_at
         return ts && now - new Date(ts).getTime() < RECENT_DONE_MS
       })
-      setRows(visible)
+      setRows(dedupeRows(visible))
     }
     setLoaded(true)
   }, [])
+
+  // Swipe-to-delete. Drops every row in the group (the visible one + any dupes).
+  const remove = useCallback(async (row) => {
+    const ids = row.ids || [row.id]
+    setRows((prev) => prev.filter((r) => r.id !== row.id)) // optimistic
+    const { error } = await supabase.from('media_requests').delete().in('id', ids)
+    if (error) await load() // put it back if the delete didn't take
+  }, [load])
 
   useEffect(() => {
     load()
@@ -97,5 +136,5 @@ export function useDownloads() {
   }, [load])
 
   const active = rows.filter((r) => ACTIVE.has(r.status))
-  return { rows, active, loaded, reload: load }
+  return { rows, active, loaded, reload: load, remove }
 }
