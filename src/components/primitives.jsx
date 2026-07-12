@@ -244,6 +244,7 @@ const ImageCover = ({ item, fallback }) => {
         onError={() => setErrored(true)}
         style={{
           width: '100%', height: '100%',
+          maxWidth: '100%', minWidth: 0,
           objectFit: 'cover',
           objectPosition: isLandscape ? 'center' : 'center top',
           display: 'block',
@@ -373,9 +374,11 @@ export const Card = ({ item, onClick }) => {
   const ext = item.extension || {}
   const isActive = item.status === 'active'
   return (
-    <div onClick={onClick} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div onClick={onClick} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+      {/* minWidth:0 above and below: a grid item defaults to min-width:auto, so a
+          large intrinsic cover image can force its 1fr track wider than the cell. */}
       <div style={{
-        aspectRatio: '3 / 4', background: 'var(--paper)',
+        aspectRatio: '3 / 4', width: '100%', minWidth: 0, background: 'var(--paper)',
         border: '1px solid var(--hairline)', borderRadius: 4, overflow: 'hidden',
         position: 'relative',
         boxShadow: '0 1px 0 rgba(0,0,0,0.4), 0 12px 28px -16px rgba(0,0,0,0.6)',
@@ -438,6 +441,7 @@ export const Card = ({ item, onClick }) => {
         <div style={{
           fontFamily: 'var(--display)', fontSize: 18, lineHeight: 1.15,
           letterSpacing: '-0.005em', color: 'var(--text)', textWrap: 'balance',
+          minWidth: 0, overflowWrap: 'anywhere',
         }}>{item.title}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
           <StatusDot status={item.status} />

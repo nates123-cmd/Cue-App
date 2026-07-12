@@ -279,7 +279,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
       {density === 'grid' ? (
         <div style={{
           padding: '8px 20px 120px',
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px 14px',
+          display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px 14px',
         }}>
           {filtered.map((i) => <Card key={i.id} item={i} onClick={() => onOpenItem(i)} />)}
         </div>
