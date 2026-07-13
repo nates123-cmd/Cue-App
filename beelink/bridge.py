@@ -13,7 +13,7 @@ then keeps updating that same row so the app can show a live download status:
 It also reaps downloads that stall with no connections (blocklist + re-search the
 next release). Pure stdlib so no venv/pip needed.
 """
-import json, os, time, io, zipfile, smtplib, urllib.request, urllib.error, urllib.parse
+import json, os, time, io, re, zipfile, smtplib, urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone
 from email.message import EmailMessage
 # NB: import the class, not the module -- this file defines a function named http(),
@@ -413,6 +413,109 @@ def qbit_add(release):
     raise RuntimeError("torrent did not appear in qbit after add")
 
 
+# --- Libgen: direct-download ebook fallback --------------------------------
+#
+# Torrent indexers barely carry books, and recent nonfiction (e.g. a 2024
+# title) is often absent entirely -- but it's on Libgen. Libgen is a direct
+# HTTP download, not a torrent, so this path fetches the epub bytes itself and
+# writes them straight into EBOOK_DIR, bypassing qBittorrent. Used only when the
+# torrent ebook search comes up empty.
+
+LIBGEN_MIRRORS = [m for m in
+                  os.environ.get("LIBGEN_MIRRORS", "https://libgen.li,https://libgen.la").split(",")
+                  if m.strip()]
+_LG_UA = "Mozilla/5.0 (X11; Linux x86_64) media-bridge/1.0"
+
+
+def _lg_get(url, timeout=60, referer=None):
+    h = {"User-Agent": _LG_UA}
+    if referer:
+        h["Referer"] = referer
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=timeout) as f:
+        return f.read()
+
+
+def _lg_rows(html):
+    """Parse Libgen result rows into {md5, ext, size_mb, text} dicts, order preserved."""
+    out = []
+    for m in re.finditer(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        row = m.group(1)
+        md5m = re.search(r"md5=([A-Fa-f0-9]{32})", row)
+        if not md5m:
+            continue
+        extm = re.search(r">\s*(epub|mobi|azw3|pdf)\s*<", row, re.I)
+        sizem = re.search(r">\s*([\d.]+)\s*(KB|MB|GB)\s*<", row, re.I)
+        size_mb = None
+        if sizem:
+            v = float(sizem.group(1))
+            u = sizem.group(2).upper()
+            size_mb = v / 1024 if u == "KB" else v * 1024 if u == "GB" else v
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", row)).strip().lower()
+        out.append({"md5": md5m.group(1), "ext": (extm.group(1).lower() if extm else "?"),
+                    "size_mb": size_mb, "text": text})
+    return out
+
+
+def _lg_pick(rows, title):
+    """Prefer an English epub of sane size that matches the title's words."""
+    toks = _sig_tokens(title)
+    FOREIGN = (" (nl)", " (de)", " (fr)", " (es)", " (it)", " (ru)", "russian",
+               "german", "french", "spanish", "italian", " method ")
+    cand = []
+    for r in rows:
+        if r["ext"] != "epub":
+            continue
+        if not all(t in r["text"] for t in toks):
+            continue
+        if any(f in r["text"] for f in FOREIGN):
+            continue
+        if r["size_mb"] and r["size_mb"] > KINDLE_MAX_MB:
+            continue
+        cand.append(r)
+    return cand[0] if cand else None
+
+
+def _lg_download(md5, base):
+    """ads.php -> session key -> get.php (follows to a CDN) -> epub bytes."""
+    ads = _lg_get(f"{base}/ads.php?md5={md5}", timeout=40).decode("utf-8", "ignore")
+    km = re.search(r'href="(get\.php\?md5=[A-Fa-f0-9]{32}&key=[A-Za-z0-9]+)"', ads)
+    if not km:
+        raise RuntimeError("no get-key on ads page")
+    data = _lg_get(f"{base}/{km.group(1)}", timeout=120, referer=f"{base}/ads.php?md5={md5}")
+    if data[:2] != b"PK":                       # epub is a zip; anything else is an error page
+        raise RuntimeError("libgen returned non-epub bytes")
+    return data
+
+
+def libgen_ebook(title, author):
+    """Find + download an epub from Libgen, write it into EBOOK_DIR. Returns meta or None."""
+    query = urllib.parse.quote(f"{title} {author}".strip())
+    for base in LIBGEN_MIRRORS:
+        try:
+            html = _lg_get(f"{base}/index.php?req={query}", timeout=30).decode("utf-8", "ignore")
+        except Exception as e:
+            log(f"libgen search {base} failed: {str(e)[:60]}")
+            continue
+        pick = _lg_pick(_lg_rows(html), title)
+        if not pick:
+            continue
+        try:
+            data = _lg_download(pick["md5"], base)
+        except Exception as e:
+            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:60]}")
+            continue
+        safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
+        dest = os.path.join(EBOOK_DIR, safe)
+        os.makedirs(dest, exist_ok=True)
+        path = os.path.join(dest, f"{safe}.epub")
+        with open(path, "wb") as f:
+            f.write(data)
+        log(f"libgen: downloaded '{title}' epub -> {path} ({len(data)/1e6:.1f}MB)")
+        return {"source": "libgen", "imported": True, "path": path,
+                "release": f"libgen {pick['md5'][:8]} ({len(data)/1e6:.1f}MB)"}
+    return None
+
+
 def add_book(req):
     """Grab an ebook and/or an audiobook for this title. Returns (msg, detail_dict)."""
     title = req["title"]
@@ -431,7 +534,7 @@ def add_book(req):
     ):
         rel = _pick_release(_search_books(title, author, cats), title, formats, require)
         if not rel:
-            tried.append(f"no {kind}")
+            tried.append(f"no {kind} torrent")
             continue
         try:
             h = qbit_add(rel)
@@ -442,8 +545,19 @@ def add_book(req):
                          "seeders": rel.get("seeders")}
         log(f"book '{title}': grabbed {kind} -> {rel.get('title')!r} ({rel.get('seeders')} seeders)")
 
+    # No ebook torrent? Libgen almost certainly has it. Download directly.
+    if "ebook" not in grabbed:
+        try:
+            lg = libgen_ebook(title, author)
+            if lg:
+                grabbed["ebook"] = lg
+            else:
+                tried.append("no ebook on libgen")
+        except Exception as e:
+            tried.append(f"libgen failed: {str(e)[:60]}")
+
     if not grabbed:
-        raise RuntimeError("no book release found (" + ", ".join(tried) + ")")
+        raise RuntimeError("no book found (" + ", ".join(tried) + ")")
     got = " + ".join(sorted(grabbed))
     return f"grabbed {got} for {title}", {"books": grabbed}
 
@@ -597,6 +711,33 @@ def send_to_kindle(title, epub_path):
     return True, f"emailed {fname} ({mb:.1f}MB) to kindle"
 
 
+def _maybe_kindle(title, kind, meta):
+    """Email an imported ebook to the Kindle exactly once. Returns True if it acted.
+
+    Audiobooks are served by Audiobookshelf and skipped here. The result is
+    stamped onto meta['kindle'] so a book is never emailed twice. Works for both
+    torrent-imported and Libgen-direct ebooks (Libgen has no torrent hash).
+    """
+    if kind != "ebook" or not meta.get("imported") or meta.get("kindle"):
+        return False
+    if not (KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
+        return False                            # not configured -> leave unstamped, retry later
+    safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
+    epub = meta.get("path") or _find_epub(os.path.join(EBOOK_DIR, safe))
+    if not epub or not os.path.exists(epub):
+        meta["kindle"] = "no epub in release"
+        log(f"kindle '{title}': no .epub found")
+        return True
+    try:
+        ok, m = send_to_kindle(title, epub)
+        meta["kindle"] = m if ok else f"failed: {m}"
+        log(f"kindle '{title}': {m}")
+    except Exception as e:
+        meta["kindle"] = f"failed: {str(e)[:80]}"
+        log(f"kindle '{title}' FAILED: {e!r}")
+    return True
+
+
 def monitor_books():
     """Push live progress for book rows, and import them once they finish."""
     code, rows = sb("GET", "media_requests?status=in.(added,downloading)&media_type=eq.book"
@@ -623,8 +764,12 @@ def monitor_books():
         pcts, done_all, changed = [], True, False
         for kind, meta in books.items():
             t = tors.get(meta.get("hash"))
-            if not t:                                   # torrent gone from qbit
-                pcts.append(100 if meta.get("imported") else 0)
+            if not t:                                   # no torrent: libgen direct dl, or
+                pcts.append(100 if meta.get("imported") else 0)   # a completed torrent gone from qbit
+                if _maybe_kindle(r["title"], kind, meta):
+                    changed = True
+                if not meta.get("imported"):
+                    done_all = False
                 continue
             pct = round((t.get("progress") or 0) * 100, 1)
             pcts.append(pct)
@@ -633,23 +778,7 @@ def monitor_books():
                 if _import_book(r["title"], kind, t):
                     meta["imported"] = True
                     changed = True
-            # audiobooks are served by Audiobookshelf; ebooks go to the Kindle.
-            # "kindle" is stamped either way so a book is never emailed twice.
-            if (kind == "ebook" and meta.get("imported") and not meta.get("kindle")
-                    and KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
-                safe = "".join(c for c in r["title"] if c.isalnum() or c in " -_'").strip()
-                epub = _find_epub(os.path.join(EBOOK_DIR, safe or "Unknown"))
-                if not epub:
-                    meta["kindle"] = "no epub in release"
-                    log(f"kindle '{r['title']}': no .epub found in the grabbed files")
-                else:
-                    try:
-                        ok, m = send_to_kindle(r["title"], epub)
-                        meta["kindle"] = m if ok else f"failed: {m}"
-                        log(f"kindle '{r['title']}': {m}")
-                    except Exception as e:
-                        meta["kindle"] = f"failed: {str(e)[:80]}"
-                        log(f"kindle '{r['title']}' FAILED: {e!r}")
+            if _maybe_kindle(r["title"], kind, meta):   # ebook -> Kindle once imported
                 changed = True
             if not finished:
                 done_all = False
