@@ -13,8 +13,9 @@ then keeps updating that same row so the app can show a live download status:
 It also reaps downloads that stall with no connections (blocklist + re-search the
 next release). Pure stdlib so no venv/pip needed.
 """
-import json, os, time, urllib.request, urllib.error, urllib.parse
+import json, os, time, io, zipfile, smtplib, urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone
+from email.message import EmailMessage
 # NB: import the class, not the module -- this file defines a function named http(),
 # which would shadow the stdlib `http` package and break `http.cookiejar`.
 from http.cookiejar import CookieJar
@@ -34,6 +35,13 @@ BOOK_SAVE_CT     = os.environ.get("BOOK_SAVE_CT", "/data/torrents/books")       
 TORRENT_HOST_DIR = os.environ.get("TORRENT_HOST_DIR", "/srv/media/data/torrents/books")  # same dir, host side
 AUDIOBOOK_DIR    = os.environ.get("AUDIOBOOK_DIR", "/srv/media/data/media/audiobooks")
 EBOOK_DIR        = os.environ.get("EBOOK_DIR", "/srv/media/data/media/ebooks")
+
+# Ebooks get emailed to the Kindle once they land. Blank = feature off (books
+# still download and land in EBOOK_DIR, they just don't get sent).
+KINDLE_EMAIL       = os.environ.get("KINDLE_EMAIL", "")          # <random>@kindle.com
+GMAIL_USER         = os.environ.get("GMAIL_USER", "")            # must be an Amazon-approved sender
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+KINDLE_MAX_MB      = float(os.environ.get("KINDLE_MAX_MB", "24"))  # gmail attachment ceiling
 R_PROFILE = int(os.environ.get("RADARR_PROFILE", "4"))
 R_ROOT    = os.environ.get("RADARR_ROOT", "/data/media/movies")
 S_PROFILE = int(os.environ.get("SONARR_PROFILE", "4"))
@@ -487,6 +495,108 @@ def _import_book(title, kind, tor):
         return False
 
 
+# ---------------------------------------------------------------------------
+# ebook -> Kindle
+#
+# Audiobooks are served by Audiobookshelf off /media/audiobooks. Ebooks are
+# read on a Kindle, so after an ebook lands we email it to the Send-to-Kindle
+# address. Amazon converts EPUB server-side, which is what puts the book in the
+# Kindle Library with Whispersync -- so send the EPUB as-is. Do NOT convert to
+# AZW3/KF8 first: Amazon refuses those by email.
+# ---------------------------------------------------------------------------
+
+def _find_epub(root):
+    """Largest .epub under root (torrents often ship samples/readme junk alongside)."""
+    best, best_sz = None, -1
+    for dirpath, _d, files in os.walk(root):
+        for fn in files:
+            if fn.lower().endswith(".epub"):
+                p = os.path.join(dirpath, fn)
+                sz = os.path.getsize(p)
+                if sz > best_sz:
+                    best, best_sz = p, sz
+    return best
+
+
+def _epub_repair(path):
+    """Return repaired epub bytes.
+
+    Torrent-sourced EPUBs get rejected by Amazon for two boring reasons:
+      * no <dc:language> in the OPF          -> error E999, book silently dropped
+      * XHTML with no charset declaration    -> Amazon assumes ISO-8859-1, mojibake
+    Both are cheap to fix in-place; an epub is just a zip. (This is the same
+    repair calibre/kindle-epub-fix do -- done here to keep bridge.py stdlib-only.)
+    """
+    buf = io.BytesIO()
+    fixed_lang = fixed_charset = 0
+    with zipfile.ZipFile(path) as zin:
+        items = zin.infolist()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+            for it in items:
+                data = zin.read(it.filename)
+                low = it.filename.lower()
+
+                if low.endswith(".opf"):
+                    txt = data.decode("utf-8", "ignore")
+                    if "<dc:language" not in txt and "<language" not in txt:
+                        # inject into the metadata block Amazon reads
+                        for tag in ("</metadata>", "</opf:metadata>"):
+                            if tag in txt:
+                                txt = txt.replace(
+                                    tag, "  <dc:language>en</dc:language>\n" + tag, 1)
+                                fixed_lang += 1
+                                break
+                    data = txt.encode("utf-8")
+
+                elif low.endswith((".xhtml", ".html", ".htm")):
+                    txt = data.decode("utf-8", "ignore")
+                    head = txt[:600].lower()
+                    if "charset" not in head:
+                        if "<head>" in txt:
+                            txt = txt.replace(
+                                "<head>", '<head>\n<meta charset="utf-8"/>', 1)
+                            fixed_charset += 1
+                        elif "<head " in txt:            # head with attributes
+                            i = txt.index("<head ")
+                            j = txt.index(">", i)
+                            txt = txt[:j + 1] + '\n<meta charset="utf-8"/>' + txt[j + 1:]
+                            fixed_charset += 1
+                    data = txt.encode("utf-8")
+
+                zout.writestr(it, data)
+    if fixed_lang or fixed_charset:
+        log(f"epub repair: +{fixed_lang} language tag, +{fixed_charset} charset decl")
+    return buf.getvalue()
+
+
+def send_to_kindle(title, epub_path):
+    """Email an epub to the Send-to-Kindle address. Returns (ok, message)."""
+    if not (KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
+        return False, "kindle not configured"
+    try:
+        data = _epub_repair(epub_path)
+    except Exception as e:                      # a broken zip is still worth trying raw
+        log(f"epub repair failed ({e!r}); sending original")
+        data = open(epub_path, "rb").read()
+
+    mb = len(data) / 1e6
+    if mb > KINDLE_MAX_MB:                      # gmail caps attachments ~25MB
+        return False, f"too big for email ({mb:.1f}MB > {KINDLE_MAX_MB}MB)"
+
+    msg = EmailMessage()
+    msg["From"] = GMAIL_USER
+    msg["To"] = KINDLE_EMAIL
+    msg["Subject"] = title                      # Amazon uses the attachment, not the body
+    msg.set_content(f"{title} — sent by Cue")
+    fname = os.path.basename(epub_path)
+    msg.add_attachment(data, maintype="application", subtype="epub+zip", filename=fname)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=120) as s:
+        s.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        s.send_message(msg)
+    return True, f"emailed {fname} ({mb:.1f}MB) to kindle"
+
+
 def monitor_books():
     """Push live progress for book rows, and import them once they finish."""
     code, rows = sb("GET", "media_requests?status=in.(added,downloading)&media_type=eq.book"
@@ -523,6 +633,24 @@ def monitor_books():
                 if _import_book(r["title"], kind, t):
                     meta["imported"] = True
                     changed = True
+            # audiobooks are served by Audiobookshelf; ebooks go to the Kindle.
+            # "kindle" is stamped either way so a book is never emailed twice.
+            if (kind == "ebook" and meta.get("imported") and not meta.get("kindle")
+                    and KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
+                safe = "".join(c for c in r["title"] if c.isalnum() or c in " -_'").strip()
+                epub = _find_epub(os.path.join(EBOOK_DIR, safe or "Unknown"))
+                if not epub:
+                    meta["kindle"] = "no epub in release"
+                    log(f"kindle '{r['title']}': no .epub found in the grabbed files")
+                else:
+                    try:
+                        ok, m = send_to_kindle(r["title"], epub)
+                        meta["kindle"] = m if ok else f"failed: {m}"
+                        log(f"kindle '{r['title']}': {m}")
+                    except Exception as e:
+                        meta["kindle"] = f"failed: {str(e)[:80]}"
+                        log(f"kindle '{r['title']}' FAILED: {e!r}")
+                changed = True
             if not finished:
                 done_all = False
 
