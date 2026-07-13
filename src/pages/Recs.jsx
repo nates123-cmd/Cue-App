@@ -4,11 +4,14 @@ import { TypeIcon } from '../components/TypeIcon'
 import {
   Cover, Mono, Spine, WatchOn, btnGhost, btnPrimary,
 } from '../components/primitives'
+import { DiscoverRow } from '../components/DiscoverRow'
+import { DiscoverSheet } from '../components/DiscoverSheet'
 import { metaFor } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 import {
   generateRecs, whyThis, loadBatch, saveBatch, addDismissal,
 } from '../lib/recs'
+import { feedRows, hasTmdbKey, clearDiscoverCache } from '../lib/discover'
 
 const SOURCE_LABEL = { tmdb: 'TMDB', tastedive: 'TasteDive', backlog: 'Backlog', claude: 'Cue' }
 
@@ -141,11 +144,17 @@ const CardSkeleton = ({ i }) => (
   </div>
 )
 
-export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem }) => {
+export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem, onPushToRadarr }) => {
   const ed = useEdition()
   const [batch, setBatch] = useState(() => loadBatch())
   const [generating, setGenerating] = useState(false)
-  const [view, setView] = useState('net')      // net | backlog
+  // The feed is the landing view — the tab opens on "what's out there", the way
+  // Overseerr does. Asking for a recommendation switches to `net`.
+  const [view, setView] = useState('feed')     // feed | net | backlog
+  const [sheetEntry, setSheetEntry] = useState(null) // tapped discover tile
+  // Bumped by the feed's ↻ — remounts the rows so they refetch after the cache
+  // has been dropped.
+  const [feedNonce, setFeedNonce] = useState(0)
   const [query, setQuery] = useState('')
   const [whyMap, setWhyMap] = useState({})      // id → why
   const [whyBusy, setWhyBusy] = useState(new Set())
@@ -237,6 +246,52 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem 
   const visibleNet = batch?.netNew || []
   const seedChip = activeSeed?.kind === 'item' ? (activeSeed.item?.title) : (batch?.seed?.itemTitle)
 
+  // ── discover feed ──────────────────────────────────────────
+  const rows = useMemo(() => feedRows(), [])
+
+  // Titles already in the library, so the feed can mark them instead of
+  // pretending they're new. Matched on type+title because a discover entry has
+  // no Cue id — the same title-match the rest of the data layer uses.
+  const libraryKeys = useMemo(
+    () => new Set(items.map((i) => `${i.type}:${(i.title || '').toLowerCase().trim()}`)),
+    [items],
+  )
+
+  const inLibrary = (entry) =>
+    !!entry && libraryKeys.has(`${entry.type}:${entry.title.toLowerCase().trim()}`)
+
+  // Queueing from the feed writes a real library row, carrying TMDB's facts
+  // through as the extension so the card renders rich without a re-enrich.
+  const queueFromFeed = async (entry) => {
+    const f = entry.facts || {}
+    await onAdd({
+      title: entry.title,
+      type: entry.type,
+      status: 'queued',
+      recommended_by: 'Cue · feed',
+      tags: [],
+      with: [],
+      enrichment: { synopsis: f.synopsis || '' },
+      extension: { ...f },
+      image_url: f.image_url || null,
+      cover_kind: f.image_url ? 'poster' : undefined,
+      links: [],
+    })
+  }
+
+  // Downloading from the feed hands the same shape the rest of Cue pushes:
+  // pushToRadarr reads type, title and extension.{tmdb_id, release_year}.
+  const downloadFromFeed = async (entry) =>
+    onPushToRadarr({
+      title: entry.title,
+      type: entry.type,
+      extension: { ...(entry.facts || {}) },
+    })
+
+  const sheetRow = sheetEntry
+    ? rows.find((r) => r.key === sheetEntry._rowKey)
+    : null
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       <Masthead kicker="No. 002 · Recommendations" title="What's next?" />
@@ -274,21 +329,37 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem 
           </div>
         </div>
 
-        {/* net-new ⇄ backlog toggle + refresh */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {[['net', 'New to you'], ['backlog', `From your queue${backlogItems.length ? ` · ${backlogItems.length}` : ''}`]].map(([v, label]) => (
+        {/* feed ⇄ net-new ⇄ backlog toggle + refresh */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          {[
+            ['feed', 'Feed'],
+            ['net', `For you${visibleNet.length ? ` · ${visibleNet.length}` : ''}`],
+            ['backlog', `Your queue${backlogItems.length ? ` · ${backlogItems.length}` : ''}`],
+          ].map(([v, label]) => (
             <button key={v} onClick={() => setView(v)} style={{
               appearance: 'none', cursor: 'pointer', padding: '6px 11px', borderRadius: 999,
               background: view === v ? 'var(--text)' : 'transparent', color: view === v ? 'var(--ink)' : 'var(--muted)',
               border: `1px solid ${view === v ? 'var(--text)' : 'var(--hairline-strong)'}`,
               fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
+              whiteSpace: 'nowrap', flexShrink: 0,
             }}>{label}</button>
           ))}
           <span style={{ flex: 1 }} />
-          {batch && (
+          {view === 'feed' ? (
+            <button
+              onClick={() => { clearDiscoverCache(); setFeedNonce((n) => n + 1) }}
+              title="Refresh the feed"
+              style={{
+                appearance: 'none', cursor: 'pointer', background: 'transparent', border: 0,
+                color: 'var(--muted)', padding: '2px 6px', flexShrink: 0,
+              }}
+            >
+              <span style={{ display: 'inline-block', fontSize: 13 }}>↻</span>
+            </button>
+          ) : batch && (
             <button onClick={onRefresh} disabled={generating || !activeSeed} title="Regenerate" style={{
               appearance: 'none', cursor: generating ? 'wait' : 'pointer', background: 'transparent', border: 0,
-              color: 'var(--muted)', padding: '2px 6px', opacity: activeSeed ? 1 : 0.4,
+              color: 'var(--muted)', padding: '2px 6px', opacity: activeSeed ? 1 : 0.4, flexShrink: 0,
             }}>
               <span style={{ display: 'inline-block', fontSize: 13, transition: 'transform 320ms', transform: generating ? 'rotate(180deg)' : 'none' }}>↻</span>
             </button>
@@ -296,7 +367,27 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem 
         </div>
 
         {/* Body */}
-        {generating ? (
+        {view === 'feed' ? (
+          !hasTmdbKey() ? (
+            <div style={{ padding: '22px 18px', border: '1px dashed var(--hairline-strong)', borderRadius: 3, color: 'var(--muted)' }}>
+              <Mono size={9} dim>No TMDB key</Mono>
+              <p style={{ margin: '8px 0 0', fontFamily: 'var(--body)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--text-soft)' }}>
+                The feed reads what's new on each streaming service from TMDB. Set <strong>VITE_TMDB_KEY</strong> in the deploy env to switch it on.
+              </p>
+            </div>
+          ) : (
+            <div key={feedNonce} style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+              {rows.map((row) => (
+                <DiscoverRow
+                  key={row.key}
+                  row={row}
+                  libraryKeys={libraryKeys}
+                  onOpen={(e) => setSheetEntry({ ...e, _rowKey: row.key })}
+                />
+              ))}
+            </div>
+          )
+        ) : generating ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {[0, 1, 2, 3].map((i) => <CardSkeleton key={i} i={i} />)}
           </div>
@@ -342,6 +433,15 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem 
           )
         )}
       </div>
+
+      <DiscoverSheet
+        entry={sheetEntry}
+        unreleased={!!sheetRow?.unreleased}
+        inLibrary={inLibrary(sheetEntry)}
+        onClose={() => setSheetEntry(null)}
+        onQueue={queueFromFeed}
+        onDownload={downloadFromFeed}
+      />
     </div>
   )
 }

@@ -249,6 +249,7 @@ export default function App() {
               onClearSeed={() => setRecsSeed(null)}
               onAdd={onAdd}
               onOpenItem={setOpenItem}
+              onPushToRadarr={pushToRadarr}
             />
           )}
           {page === 'library' && (
