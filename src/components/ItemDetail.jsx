@@ -10,6 +10,7 @@ import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 import { enrich } from '../lib/enrichment'
 import { pushTarget } from '../lib/items'
+import { ResumeAudioSheet } from './ResumeAudioSheet'
 
 // Small uppercased mono chip rendered just above the synopsis. Picks up the
 // suite signal color so it reads like a press-tag editorial label.
@@ -127,6 +128,7 @@ export const ItemDetail = ({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [pushState, setPushState] = useState(null) // null | 'pushing' | 'sent' | 'error'
+  const [resumeOpen, setResumeOpen] = useState(false) // "resume in audio" sheet (books)
   const readOnly = item._source !== 'rec' // media/visit-derived items are read-only
 
   // Fetch cover art + where-to-watch (and other type facts) for this item on
@@ -274,6 +276,15 @@ export const ItemDetail = ({
                 : pushState === 'sent' ? `Queued in ${pushTarget(item.type).app} ✓`
                 : pushState === 'error' ? 'Failed — tap to retry'
                 : `Push to ${pushTarget(item.type).app}`}
+            </button>
+          )}
+
+          {item.type === 'book' && (
+            <button onClick={() => setResumeOpen(true)} style={{
+              ...btnGhost, alignSelf: 'flex-start',
+              display: 'inline-flex', alignItems: 'center', gap: 7,
+            }}>
+              <span style={{ fontSize: 11 }}>▶</span> Resume in audio
             </button>
           )}
 
@@ -471,6 +482,7 @@ export const ItemDetail = ({
           )}
         </div>
       </div>
+      <ResumeAudioSheet open={resumeOpen} item={item} onClose={() => setResumeOpen(false)} />
     </>
   )
 }
