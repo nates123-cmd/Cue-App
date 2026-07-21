@@ -182,7 +182,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                     color: 'var(--text)', padding: 0, width: '100%',
                   }}
                 />
-                <button onClick={() => { setAuto(true); setAutoMiss(false) }} style={{
+                <button onClick={() => { setAuto(true); setAutoMiss(false); const q = title.trim(); if (q) submitAuto(q) }} style={{
                   appearance: 'none', cursor: 'pointer', width: '100%', marginTop: 4,
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 4px',
                   background: auto ? 'color-mix(in oklab, var(--signal) 14%, var(--paper))' : 'transparent',
