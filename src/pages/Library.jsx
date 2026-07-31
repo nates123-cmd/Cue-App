@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Masthead } from '../components/Masthead'
 import { TypeIcon } from '../components/TypeIcon'
 import {
-  Card, Cover, Mono, RatingDots, SharedMark, StatusDot,
+  Card, Cover, FulfillmentPills, Mono, RatingDots, SharedMark, StatusDot,
   btnGhost, btnTextChip, formatLengthShort, lengthBucket,
 } from '../components/primitives'
 import { SwipeRow } from '../components/SwipeRow'
@@ -40,6 +40,7 @@ const LibraryRow = ({ item, onClick }) => {
           fontFamily: 'var(--display)', fontSize: 17, lineHeight: 1.15, color: 'var(--text)',
           overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
         }}>{item.title}</div>
+        <FulfillmentPills item={item} compact />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
           <Mono size={9} dim>↗ {item.recommended_by}</Mono>
           {(item.with || []).length > 0 && (

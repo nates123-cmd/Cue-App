@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import { TypeIcon } from './TypeIcon'
+import { fulfillmentBadges } from '../lib/fulfillment'
 import { metaFor, TYPE_META } from '../lib/meta'
 
 // ── format / bucket helpers ─────────────────────────────────
@@ -351,6 +352,52 @@ export const StatusDot = ({ status }) => {
   )
 }
 
+// Sticky pipeline status: "ebook delivered", "audiobook downloaded",
+// "place synced". Reads `recommendations.fulfillment`, which the Beelink
+// daemons stamp — unlike the DownloadTray these never expire, because the
+// question ("is this on my Kindle?") outlives the download by months.
+const FULFILLMENT_TONE_STYLE = {
+  wait: { dot: 'var(--muted)', text: 'var(--muted)', ring: 'none' },
+  go: {
+    dot: 'var(--signal)',
+    text: 'var(--text)',
+    ring: '0 0 0 3px color-mix(in oklab, var(--signal) 22%, transparent)',
+  },
+  done: { dot: 'color-mix(in oklab, var(--text) 60%, transparent)', text: 'var(--muted)', ring: 'none' },
+  fail: { dot: 'transparent', text: 'var(--signal)', ring: 'inset 0 0 0 1.5px var(--signal)' },
+}
+
+export const FulfillmentPills = ({ item, compact = false, max = null }) => {
+  const badges = fulfillmentBadges(item)
+  if (badges.length === 0) return null
+  const shown = max ? badges.slice(0, max) : badges
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: compact ? 7 : 10,
+      flexWrap: 'wrap', minWidth: 0,
+    }}>
+      {shown.map((b) => {
+        const tone = FULFILLMENT_TONE_STYLE[b.tone] || FULFILLMENT_TONE_STYLE.wait
+        return (
+          <span key={b.key} title={b.title} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0,
+            fontFamily: 'var(--mono)', fontSize: compact ? 8.5 : 9,
+            letterSpacing: '0.11em', textTransform: 'uppercase',
+            color: tone.text, whiteSpace: 'nowrap',
+          }}>
+            <span style={{
+              width: 5, height: 5, borderRadius: '50%', flex: 'none',
+              background: tone.dot, boxShadow: tone.ring,
+            }} />
+            {compact ? b.short : b.label}
+            {compact && b.pct != null && b.tone === 'go' ? ` ${b.pct}%` : ''}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 export const SharedMark = ({ item, partner = 'Amanda', size = 9 }) => {
   if (!(item.with || []).includes(partner)) return null
   const sayUs = item.recommended_by === partner
@@ -452,6 +499,7 @@ export const Card = ({ item, onClick }) => {
             </Mono>
           )}
         </div>
+        <FulfillmentPills item={item} compact max={3} />
       </div>
     </div>
   )

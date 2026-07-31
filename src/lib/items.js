@@ -76,6 +76,10 @@ function recToItem(r) {
     extension: ext,
     image_url: r.image_url || null,
     image_tone: r.image_tone,
+    // Sticky pipeline status stamped by the Beelink daemons (media-bridge +
+    // reading-sync). App-side writes are limited to the optimistic stamp on
+    // push; everything after that is the box's to say.
+    fulfillment: r.fulfillment && typeof r.fulfillment === 'object' ? r.fulfillment : {},
     cover_kind: r.cover_kind || defaultCoverKind(type),
     created_at: r.created_at,
     started_at: r.started_at,
@@ -205,6 +209,29 @@ export function useItems() {
     return item
   }, [])
 
+  // Cheap refresh of just the pipeline column. A push takes minutes (ebook) to
+  // hours (audiobook swarm) to finish, and the daemons stamp progress as they
+  // go — but the library itself only loads at boot, so without this the pills
+  // would sit on whatever they said when the tab opened. Two columns instead of
+  // a full reload, and it leaves every other field (including unsaved edits in
+  // flight) untouched.
+  const refreshFulfillment = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('recommendations')
+      .select('id,fulfillment')
+      .not('fulfillment', 'eq', '{}')
+    if (error || !data) return
+    const byId = new Map(data.map((r) => [r.id, r.fulfillment || {}]))
+    setItems((prev) => prev.map((i) => {
+      if (i._source !== 'rec') return i
+      const next = byId.get(i.id)
+      if (!next) return i
+      // Reference-compare via JSON so unchanged rows don't re-render the grid.
+      if (JSON.stringify(next) === JSON.stringify(i.fulfillment || {})) return i
+      return { ...i, fulfillment: next }
+    }))
+  }, [])
+
   const updateItem = useCallback(async (id, patch) => {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
     const item = itemsRef.current.find((i) => i.id === id)
@@ -261,7 +288,10 @@ export function useItems() {
   const itemsRef = useRef(items)
   itemsRef.current = items
 
-  return { items, loading, error, addItem, updateItem, deleteItem, finishItem, reload }
+  return {
+    items, loading, error, addItem, updateItem, deleteItem, finishItem, reload,
+    refreshFulfillment,
+  }
 }
 
 function patchToDb(patch) {
@@ -280,6 +310,7 @@ function patchToDb(patch) {
     cover_kind: 'cover_kind',
     title: 'title',
     links: 'where_to_find',
+    fulfillment: 'fulfillment',
   }
   // Map nested enrichment.synopsis → recommendations.summary, if present.
   const out = {}

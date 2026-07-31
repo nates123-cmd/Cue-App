@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditionContext } from './lib/EditionContext'
 import { editionForHour, formatClock, PARTNER } from './lib/meta'
+import { initialFulfillment } from './lib/fulfillment'
 import { useItems, pushTarget } from './lib/items'
 import { supabase } from './lib/supabase'
 import { backfillMissingImages } from './lib/backfill'
@@ -24,7 +25,21 @@ export default function App() {
 
   const {
     items, loading, addItem, updateItem, deleteItem, finishItem, reload,
+    refreshFulfillment,
   } = useItems()
+
+  // Poll the pipeline column while anything is still in flight. Goes quiet once
+  // every leg has landed (or failed), so a settled library costs nothing.
+  const anyInFlight = useMemo(() => items.some((i) => {
+    const legs = Object.values(i.fulfillment || {}).filter((l) => l && typeof l === 'object')
+    return legs.some((l) => ['searching', 'downloading', 'pending'].includes(l.state))
+  }), [items])
+
+  useEffect(() => {
+    if (!anyInFlight) return undefined
+    const id = setInterval(() => { refreshFulfillment() }, 20 * 1000)
+    return () => clearInterval(id)
+  }, [anyInFlight, refreshFulfillment])
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60 * 1000)
@@ -195,18 +210,35 @@ export default function App() {
       .limit(1)
     if (existing && existing.length > 0) return { duplicate: true }
 
-    const { error } = await supabase.from('media_requests').insert({
+    const { data: inserted, error } = await supabase.from('media_requests').insert({
       media_type: target.media_type,
       tmdb_id: item.type === 'book' || !Number.isFinite(tmdbId) ? null : tmdbId,
       title: item.title,
       year: year ? Number(year) : null,
       detail: item.type === 'book' && ext.author ? JSON.stringify({ author: ext.author }) : null,
+      // Lets the Beelink daemons stamp fulfillment back onto the right card.
+      // Matching by title from the box is fuzzy — the importer strips
+      // punctuation for folder names and release titles differ again.
+      rec_id: item._source === 'rec' ? item.id : null,
       source_app: 'cue',
-    })
+    }).select('id').single()
     // 23505 = the unique index caught a double-tap that raced the check above.
     if (error) {
       if (error.code === '23505') return { duplicate: true }
       throw error
+    }
+
+    // Optimistic pipeline stamp so the card shows the legs immediately rather
+    // than staying blank until the bridge's first 20s tick. The daemons
+    // overwrite each leg from here on; this is the only fulfillment write the
+    // app ever makes.
+    if (item._source === 'rec') {
+      const stamped = { ...initialFulfillment(item.type), request_id: inserted?.id || null }
+      try {
+        await updateItem(item.id, { fulfillment: stamped })
+      } catch (e) {
+        console.warn('fulfillment stamp failed (push still queued)', e)
+      }
     }
     return { duplicate: false }
   }

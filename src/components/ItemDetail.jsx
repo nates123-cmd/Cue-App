@@ -9,6 +9,7 @@ import {
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 import { enrich } from '../lib/enrichment'
+import { fulfillmentBadges } from '../lib/fulfillment'
 import { pushTarget } from '../lib/items'
 
 // Small uppercased mono chip rendered just above the synopsis. Picks up the
@@ -24,6 +25,58 @@ const GenreChip = ({ genre }) => (
     border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
   }}>{genre}</span>
 )
+
+// The full pipeline read-out for one title: a row per leg with whatever the
+// Beelink daemons last said about it. A book push fans out to three legs
+// (ebook -> Kindle, audiobook -> Audiobookshelf, epub -> Place/X4 sync), and
+// they finish at wildly different times — the audiobook can be hours behind the
+// ebook — so each reports for itself rather than collapsing to one status.
+const PANEL_TONE = {
+  wait: 'var(--muted)',
+  go: 'var(--signal)',
+  done: 'color-mix(in oklab, var(--text) 60%, transparent)',
+  fail: 'var(--signal)',
+}
+
+const FulfillmentPanel = ({ item }) => {
+  const badges = fulfillmentBadges(item)
+  if (badges.length === 0) return null
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: 8,
+      padding: '11px 12px', borderRadius: 3,
+      border: '1px solid var(--hairline)',
+      background: 'color-mix(in oklab, var(--paper) 50%, transparent)',
+    }}>
+      <Mono size={9} dim>pipeline</Mono>
+      {badges.map((b) => (
+        <div key={b.key} style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0 }}>
+          <span style={{
+            width: 5, height: 5, borderRadius: '50%', flex: 'none',
+            transform: 'translateY(-2px)',
+            background: b.tone === 'fail' ? 'transparent' : PANEL_TONE[b.tone],
+            boxShadow: b.tone === 'fail' ? 'inset 0 0 0 1.5px var(--signal)'
+              : b.tone === 'go' ? '0 0 0 3px color-mix(in oklab, var(--signal) 22%, transparent)'
+                : 'none',
+          }} />
+          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{
+              fontFamily: 'var(--mono)', fontSize: 9.5, letterSpacing: '0.11em',
+              textTransform: 'uppercase',
+              color: b.tone === 'fail' ? 'var(--signal)' : 'var(--text)',
+            }}>{b.label}</span>
+            {b.title && b.title !== b.label && (
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)',
+                overflowWrap: 'anywhere',
+              }}>{b.title}</span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 const TogetherRow = ({ item, partner, onToggle }) => {
   const isShared = (item.with || []).includes(partner)
@@ -260,6 +313,10 @@ export const ItemDetail = ({
               </button>
             )}
           </div>
+
+          {/* Where this title actually ended up. Sticky — the DownloadTray
+              forgets a finished push after a day, this doesn't. */}
+          <FulfillmentPanel item={item} />
 
           {pushTarget(item.type) && onPushToRadarr && (
             <button onClick={runPush} disabled={pushState === 'pushing' || pushState === 'sent'} style={{
