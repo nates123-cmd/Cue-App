@@ -378,7 +378,9 @@ def stamp_place_ready(force=False):
         cur = rec.get('fulfillment')
         if not isinstance(cur, dict):
             cur = {}
-        old = cur.get('place') if isinstance(cur.get('place'), dict) else {}
+        old = dict(cur.get('place')) if isinstance(cur.get('place'), dict) else {}
+        if place['state'] == 'ready':
+            old.pop('detail', None)     # "indexing for Place" is stale once it IS indexed
         place['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         cur['place'] = {**old, **place}
         # Merge into whatever media-bridge has written since we read the row --
