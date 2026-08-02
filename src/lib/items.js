@@ -66,6 +66,10 @@ function recToItem(r) {
     title: r.title,
     type,
     status: normalizeStatus(r.status, r.finished_at || r.consumed_at),
+    // "Up Next" shortlist position. NULL = in the backlog, unranked. Priority
+    // is deliberately NOT a status — you can be sure you'll read something and
+    // still not have started it.
+    queue_rank: r.queue_rank ?? null,
     recommended_by: r.recommended_by || 'me',
     tags: r.tags || [],
     with: r.with || [],
@@ -103,6 +107,7 @@ function mediaToItem(m) {
     title: m.title,
     type,
     status: 'done',
+    queue_rank: null, // media_entries are already-consumed; never on the shortlist
     recommended_by: 'me',
     tags: [],
     with: [],
@@ -284,19 +289,68 @@ export function useItems() {
     }
   }, [reload])
 
+  // Rewrite the whole shortlist to `orderedIds` (rank 1..n, ascending). Any row
+  // that was ranked and isn't in the list drops back to the backlog (NULL).
+  // Whole-list rewrite rather than gap integers: the shortlist is ~10 rows, and
+  // the bookkeeping to avoid a handful of updates costs more than it saves.
+  const setShortlist = useCallback(async (orderedIds) => {
+    const rankById = new Map(orderedIds.map((id, i) => [id, i + 1]))
+    // Read the previous ranking BEFORE the optimistic write so we know which
+    // rows fell off the list.
+    const dropped = itemsRef.current
+      .filter((i) => i._source === 'rec' && i.queue_rank != null && !rankById.has(i.id))
+      .map((i) => i.id)
+
+    setItems((prev) => prev.map((i) => {
+      if (i._source !== 'rec') return i
+      const next = rankById.has(i.id) ? rankById.get(i.id) : null
+      return i.queue_rank === next ? i : { ...i, queue_rank: next }
+    }))
+
+    const results = await Promise.all([
+      ...orderedIds.map((id) => supabase
+        .from('recommendations').update({ queue_rank: rankById.get(id) }).eq('id', id)),
+      ...(dropped.length
+        ? [supabase.from('recommendations').update({ queue_rank: null }).in('id', dropped)]
+        : []),
+    ])
+    const bad = results.find((r) => r.error)
+    if (bad) { await reload(); throw bad.error }
+  }, [reload])
+
+  // Library's "Up next" action: append to the end of the shortlist, or drop off
+  // it if already on. Only `rec`-backed items can be ranked.
+  const toggleShortlist = useCallback(async (item) => {
+    if (!item || item._source !== 'rec') return
+    const ranked = shortlistOf(itemsRef.current).map((i) => i.id)
+    const next = ranked.includes(item.id)
+      ? ranked.filter((id) => id !== item.id)
+      : [...ranked, item.id]
+    return setShortlist(next)
+  }, [setShortlist])
+
   // Keep a ref to items so mutation handlers can resolve _source without re-deriving
   const itemsRef = useRef(items)
   itemsRef.current = items
 
   return {
     items, loading, error, addItem, updateItem, deleteItem, finishItem, reload,
-    refreshFulfillment,
+    refreshFulfillment, setShortlist, toggleShortlist,
   }
+}
+
+// The "Up Next" shortlist, in rank order. Finished items fall off on their own
+// (a done item is no longer up next) without needing the rank cleared.
+export function shortlistOf(items) {
+  return items
+    .filter((i) => i._source === 'rec' && i.queue_rank != null && i.status !== 'done')
+    .sort((a, b) => a.queue_rank - b.queue_rank)
 }
 
 function patchToDb(patch) {
   const map = {
     status: 'status',
+    queue_rank: 'queue_rank',
     recommended_by: 'recommended_by',
     tags: 'tags',
     with: 'with',

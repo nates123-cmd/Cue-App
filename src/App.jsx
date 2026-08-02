@@ -25,7 +25,7 @@ export default function App() {
 
   const {
     items, loading, addItem, updateItem, deleteItem, finishItem, reload,
-    refreshFulfillment,
+    refreshFulfillment, setShortlist, toggleShortlist,
   } = useItems()
 
   // Poll the pipeline column while anything is still in flight. Goes quiet once
@@ -292,6 +292,7 @@ export default function App() {
               onSetDensity={setDensity}
               onDelete={onDelete}
               onRequestFinish={onRequestFinish}
+              onToggleShortlist={toggleShortlist}
             />
           )}
           {page === 'active' && (
@@ -300,6 +301,8 @@ export default function App() {
               onBump={onBump}
               onFinish={onFinishFromActive}
               onOpenItem={setOpenItem}
+              onReorderShortlist={setShortlist}
+              onDropFromShortlist={toggleShortlist}
             />
           )}
         </div>
@@ -350,13 +353,17 @@ export default function App() {
 
         {openItem && (
           <ItemDetail
-            item={openItem}
+            // openItem is a snapshot taken at tap time. Prefer the live row so
+            // mutations made from inside the sheet (shortlist rank, and anything
+            // added later) show immediately instead of needing a manual patch.
+            item={items.find((i) => i.id === openItem.id) || openItem}
             onClose={() => setOpenItem(null)}
             onChangeStatus={onChangeStatus}
             onToggleWith={onToggleWith}
             onPatch={onPatchItem}
             onRequestFinish={onRequestFinish}
             onPromoteToLibrary={onPromoteToLibrary}
+            onToggleShortlist={toggleShortlist}
             onDelete={onDelete}
             onPushToRadarr={pushToRadarr}
             onMoreLikeThis={onMoreLikeThis}
