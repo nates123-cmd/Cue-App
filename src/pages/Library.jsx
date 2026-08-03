@@ -9,7 +9,7 @@ import { SwipeRow } from '../components/SwipeRow'
 import { TYPE_META, TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 
-const LibraryRow = ({ item, onClick }) => {
+const LibraryRow = ({ item, onClick, onToggleShortlist }) => {
   const ext = item.extension || {}
   const meta = []
   if (item.type === 'book') meta.push(ext.author, ext.published_year)
@@ -60,12 +60,29 @@ const LibraryRow = ({ item, onClick }) => {
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
         <StatusDot status={item.status} />
         {item.rating && <RatingDots rating={item.rating} />}
+        {/* Shortlist toggle. Both swipe directions are already spoken for
+            (Watched / Delete), so this is an explicit tap target. */}
+        {onToggleShortlist && item.status !== 'done' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleShortlist(item) }}
+            title={item.queue_rank != null ? 'Remove from Up Next' : 'Put up next'}
+            style={{
+              appearance: 'none', cursor: 'pointer', padding: '2px 7px', borderRadius: 999,
+              background: item.queue_rank != null
+                ? 'color-mix(in oklab, var(--signal) 16%, transparent)' : 'transparent',
+              border: `1px solid ${item.queue_rank != null ? 'var(--signal)' : 'var(--hairline-strong)'}`,
+              color: item.queue_rank != null ? 'var(--signal)' : 'var(--muted)',
+              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.1em',
+              textTransform: 'uppercase', whiteSpace: 'nowrap',
+            }}
+          >{item.queue_rank != null ? `↑ ${item.queue_rank}` : '↑ Next'}</button>
+        )}
       </div>
     </div>
   )
 }
 
-export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete, onRequestFinish }) => {
+export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete, onRequestFinish, onToggleShortlist }) => {
   const ed = useEdition()
   const partner = ed.partner || 'Amanda'
   const [typeFilter, setTypeFilter] = useState('all')
@@ -112,6 +129,14 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
     if (sort === 'recent') r.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
     if (sort === 'rating') r.sort((a, b) => (b.rating || 0) - (a.rating || 0))
     if (sort === 'alpha') r.sort((a, b) => a.title.localeCompare(b.title))
+    // Shortlist first, in its own order; everything else keeps recency behind it.
+    if (sort === 'up next') {
+      r.sort((a, b) => {
+        const ar = a.queue_rank ?? Infinity, br = b.queue_rank ?? Infinity
+        if (ar !== br) return ar - br
+        return (b.created_at || '').localeCompare(a.created_at || '')
+      })
+    }
     return r
   }, [items, typeFilter, statusFilter, from, together, partner, genreFilter, lengthFilter, sort])
 
@@ -195,8 +220,9 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
 
           <span style={{ flex: 1 }} />
           <Mono size={9} dim>Sort</Mono>
-          <button onClick={() => setSort(sort === 'recent' ? 'rating' : sort === 'rating' ? 'alpha' : 'recent')}
-            style={{ ...btnTextChip(true) }}>{sort}</button>
+          <button onClick={() => setSort(
+            sort === 'recent' ? 'up next' : sort === 'up next' ? 'rating' : sort === 'rating' ? 'alpha' : 'recent',
+          )} style={{ ...btnTextChip(true) }}>{sort}</button>
         </div>
 
         {filtersOpen && (
@@ -294,7 +320,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
               onSwipeLeft={() => onRequestFinish && onRequestFinish(i)}
               onSwipeRight={() => onDelete && onDelete(i)}
             >
-              <LibraryRow item={i} onClick={() => onOpenItem(i)} />
+              <LibraryRow item={i} onClick={() => onOpenItem(i)} onToggleShortlist={onToggleShortlist} />
             </SwipeRow>
           ))}
         </div>

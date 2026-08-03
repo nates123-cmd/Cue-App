@@ -173,7 +173,7 @@ const TagEditor = ({ tags = [], onChange }) => {
 
 export const ItemDetail = ({
   item, onClose, onChangeStatus, onToggleWith,
-  onPatch, onRequestFinish, onPromoteToLibrary, onDelete, onPushToRadarr, onMoreLikeThis,
+  onPatch, onRequestFinish, onPromoteToLibrary, onDelete, onPushToRadarr, onMoreLikeThis, onToggleShortlist,
   partner = 'Amanda', recommenders = [],
 }) => {
   if (!item) return null
@@ -386,6 +386,18 @@ export const ItemDetail = ({
                   cursor: readOnly && s !== item.status ? 'not-allowed' : 'pointer',
                 }}>{s}</button>
             ))}
+            {/* Priority is orthogonal to status — an item can be shortlisted and
+                still not started. This is the grid-density path onto the list;
+                the Library list rows carry the same toggle. */}
+            {!readOnly && item.status !== 'done' && onToggleShortlist && (
+              <>
+                <span style={{ width: 1, height: 12, background: 'var(--hairline-strong)' }} />
+                <button
+                  onClick={() => onToggleShortlist(item)}
+                  style={btnTextChip(item.queue_rank != null)}
+                >{item.queue_rank != null ? `↑ up next · ${item.queue_rank}` : '↑ up next'}</button>
+              </>
+            )}
           </div>
 
           {/* From + tags */}
