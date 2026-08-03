@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Mono, RatingDots, btnGhost, btnPrimary } from './primitives'
+import { Mono, RatingPicker, btnGhost, btnPrimary } from './primitives'
+import { ratingTone } from '../lib/meta'
 
-// Small modal sheet to capture rating (3-point) + optional note before
+// Small modal sheet to capture rating (1..5) + optional note before
 // marking an item done. Restaurants get a slightly different framing.
 export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
   const [rating, setRating] = useState(null)
@@ -19,8 +20,7 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
   if (!open || !item) return null
 
   const verb = 'Mark as done'
-  const tone = (n) =>
-    n === 3 ? 'loved it' : n === 2 ? 'good, glad I did' : n === 1 ? 'meh' : 'tap a dot'
+  const tone = (n) => ratingTone(n) || 'tap a dot'
 
   return (
     <>
@@ -50,14 +50,7 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Mono size={9} dim>How was it?</Mono>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {[1, 2, 3].map((n) => (
-              <button key={n} onClick={() => setRating(rating === n ? null : n)} style={{
-                appearance: 'none', cursor: 'pointer',
-                background: 'transparent', border: 0, padding: 4,
-              }}>
-                <RatingDots rating={n <= (rating || 0) ? n : 0} size={12} />
-              </button>
-            ))}
+            <RatingPicker value={rating} onChange={setRating} size={12} />
             <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
               {tone(rating)}
             </span>
