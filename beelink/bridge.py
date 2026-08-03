@@ -170,6 +170,32 @@ def kick_cwa_ingest():
         return False
 
 
+# The X4 cannot be delivered to on demand: it is an ESP32 whose WiFi is powered
+# down while idle, and its upload server only runs on the File Transfer screen.
+# So we record the intent and let ~/apps/x4push drain it on a short cron the next
+# time the device actually appears on the LAN.
+X4PUSH = os.environ.get("X4PUSH", "/home/nate/apps/x4push/x4push.py")
+
+
+def queue_for_x4(path, rec_id=None):
+    """Queue an imported epub for delivery to the Xteink X4. Best effort.
+
+    Enqueue is idempotent on the source path, so a repeated tick is a no-op.
+    """
+    if not path or not os.path.exists(X4PUSH):
+        return False
+    try:
+        import subprocess
+        cmd = [X4PUSH, "enqueue", path] + ([rec_id] if rec_id else [])
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=30, check=False)
+        log(f"x4: queued {os.path.basename(path)}")
+        return True
+    except Exception as e:                      # never let delivery kill a download
+        log(f"x4 queue failed: {e!r}")
+        return False
+
+
 def best_match(results, title, year):
     if not results:
         return None
@@ -920,6 +946,12 @@ def monitor_books():
         ebook = books.get("ebook") or {}
         if ebook.get("imported") and not ebook.get("shelved"):
             kick_cwa_ingest()
+            _safe = "".join(c for c in r["title"] if c.isalnum() or c in " -_'").strip() or "Unknown"
+            _epub = ebook.get("path") or _find_epub(os.path.join(EBOOK_DIR, _safe))
+            if queue_for_x4(_epub, r.get("rec_id")):
+                # Deliberately not "delivered" -- the book only reaches the X4
+                # when Nate next opens File Transfer, which may be days away.
+                legs["x4"] = {"state": "pending", "detail": "queued for X4"}
             ebook["shelved"] = True
             changed = True
             legs["place"] = {"state": "pending", "detail": "indexing for Place"}
