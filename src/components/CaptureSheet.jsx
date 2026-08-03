@@ -57,6 +57,13 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
     }
   }, [open])
 
+  // The draft card can edit "From" too. Mirror it back into form state so the
+  // picker agrees and re-picking a different match doesn't wipe the name.
+  const updateDraft = (d) => {
+    setDraft(d)
+    if (d?.recommended_by) setRecommendedBy(d.recommended_by)
+  }
+
   const decorate = (card) => {
     card.recommended_by = recommendedBy
     card.with = withPartner ? [partner] : []
@@ -253,7 +260,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
             }}>
               {phase === 'enriching'
                 ? <Enriching title={enrichingTitle || title} />
-                : <DraftCard draft={draft} onChange={setDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} onPush={onPushToRadarr ? pushToRadarr : null} pushState={pushState} />}
+                : <DraftCard draft={draft} onChange={updateDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} onPush={onPushToRadarr ? pushToRadarr : null} pushState={pushState} />}
             </div>
           </div>
         </>

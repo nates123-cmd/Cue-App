@@ -174,6 +174,30 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
             </div>
           </FieldReveal>
         )}
+        {/* Who recommended it, asked at the last possible moment — you often
+            only remember the name once you see the right match on screen. The
+            picker on the search form pre-fills this; blank means "me". */}
+        <FieldReveal delay={700}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            paddingTop: 10, borderTop: '1px solid var(--hairline)',
+          }}>
+            <Mono size={9} dim>From</Mono>
+            <input
+              value={draft.recommended_by === 'me' ? '' : (draft.recommended_by || '')}
+              onChange={(e) => patch('recommended_by', e.target.value)}
+              onBlur={(e) => { if (!e.target.value.trim()) patch('recommended_by', 'me') }}
+              placeholder="who recommended it? (optional)"
+              style={{
+                appearance: 'none', flex: 1, minWidth: 0, outline: 0,
+                background: 'transparent', border: 0,
+                borderBottom: '1px dashed var(--hairline-strong)',
+                padding: '4px 0 3px', color: 'var(--text)',
+                fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+              }}
+            />
+          </div>
+        </FieldReveal>
         <FieldReveal delay={780}>
           {error && (
             <Mono size={9} style={{ color: 'var(--signal)', marginBottom: 8 }}>{error}</Mono>
