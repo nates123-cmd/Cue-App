@@ -5,7 +5,7 @@
 import { useState } from 'react'
 import { TypeIcon } from './TypeIcon'
 import { fulfillmentBadges } from '../lib/fulfillment'
-import { metaFor, TYPE_META } from '../lib/meta'
+import { metaFor, RATING_MAX, TYPE_META } from '../lib/meta'
 
 // ── format / bucket helpers ─────────────────────────────────
 export function formatLength(item) {
@@ -91,11 +91,43 @@ export const Spine = ({ type, year, size = 10 }) => (
 
 export const RatingDots = ({ rating, size = 7 }) => (
   <div style={{ display: 'flex', gap: 4 }}>
-    {[1, 2, 3].map((n) => (
+    {Array.from({ length: RATING_MAX }, (_, i) => i + 1).map((n) => (
       <span key={n} style={{
         width: size, height: size, borderRadius: '50%',
         background: rating && n <= rating ? 'var(--signal)' : 'var(--hairline-strong)',
       }} />
+    ))}
+  </div>
+)
+
+// Tappable rating. One button per dot, filled up to the current value; tapping
+// the current value clears it.
+//
+// The old 3-point version rendered a whole RatingDots row *inside* each of its
+// three buttons (three progressively-filled triplets). That does not scale --
+// at five it would be twenty-five dots -- so the picker is now one dot per
+// button, which is also what a rating control is normally expected to be.
+export const RatingPicker = ({ value, onChange, size = 12, disabled = false, gap = 8 }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap }}>
+    {Array.from({ length: RATING_MAX }, (_, i) => i + 1).map((n) => (
+      <button
+        key={n}
+        onClick={() => !disabled && onChange(value === n ? null : n)}
+        disabled={disabled}
+        aria-label={`${n} of ${RATING_MAX}`}
+        style={{
+          appearance: 'none', background: 'transparent', border: 0,
+          padding: 3, lineHeight: 0,
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? 0.7 : 1,
+        }}
+      >
+        <span style={{
+          display: 'block', width: size, height: size, borderRadius: '50%',
+          background: value && n <= value ? 'var(--signal)' : 'var(--hairline-strong)',
+          transition: 'background 140ms ease',
+        }} />
+      </button>
     ))}
   </div>
 )

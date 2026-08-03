@@ -3,9 +3,10 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Cover, Mono, RatingDots, RottenScore, Spine, WatchOn,
+  Cover, Mono, RatingPicker, RottenScore, Spine, WatchOn,
   btnGhost, btnPrimary, btnTextChip,
 } from './primitives'
+import { ratingTone } from '../lib/meta'
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 import { enrich } from '../lib/enrichment'
@@ -231,9 +232,11 @@ export const ItemDetail = ({
   if (item.type === 'podcast') meta.push(ext.host, ext.publisher, ext.cadence)
   if (item.type === 'music') meta.push(ext.artist, ext.published_year, ext.label, ext.track_count && `${ext.track_count} tracks`)
 
+  // RatingPicker already sends null when you tap the current value, so this
+  // just writes what it is given.
   const setRating = (n) => {
     if (readOnly) return
-    onPatch && onPatch(item, { rating: item.rating === n ? null : n })
+    onPatch && onPatch(item, { rating: n })
   }
 
   return (
@@ -439,20 +442,14 @@ export const ItemDetail = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Mono size={9} dim>Rating</Mono>
-              {[1, 2, 3].map((n) => (
-                <button key={n}
-                  onClick={() => setRating(n)}
-                  disabled={readOnly}
-                  style={{
-                    appearance: 'none', cursor: readOnly ? 'default' : 'pointer',
-                    background: 'transparent', border: 0, padding: 2,
-                    opacity: readOnly ? 0.7 : 1,
-                  }}>
-                  <RatingDots rating={n <= (item.rating || 0) ? n : 0} size={10} />
-                </button>
-              ))}
+              <RatingPicker
+                value={item.rating}
+                onChange={setRating}
+                size={10}
+                disabled={readOnly}
+              />
               <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
-                {item.rating === 3 ? 'loved it' : item.rating === 2 ? 'good, glad I did' : item.rating === 1 ? 'meh' : ''}
+                {ratingTone(item.rating)}
               </span>
             </div>
             <div>

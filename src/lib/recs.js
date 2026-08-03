@@ -56,10 +56,13 @@ export function clearBatch() {
 // ── taste profile (read in-prompt; no retraining) ─────────────────────────────
 // Compact view of what Nate likes — ratings + tags — for Claude's taste layer.
 function tasteProfile(items) {
+  // Thresholds are on the 1..5 scale. These were >=3 / ==2 / ==1 when ratings
+  // topped out at 3; left alone, a 3 would have gone on feeding Claude a
+  // middling title as something loved.
   const rated = items.filter((i) => i.rating)
-  const loved = rated.filter((i) => i.rating >= 3).map((i) => i.title)
-  const liked = rated.filter((i) => i.rating === 2).map((i) => i.title)
-  const meh = rated.filter((i) => i.rating === 1).map((i) => i.title)
+  const loved = rated.filter((i) => i.rating >= 4).map((i) => i.title)
+  const liked = rated.filter((i) => i.rating === 3).map((i) => i.title)
+  const meh = rated.filter((i) => i.rating <= 2).map((i) => i.title)
   const tagCount = {}
   items.forEach((i) => (i.tags || []).forEach((t) => { tagCount[t] = (tagCount[t] || 0) + 1 }))
   const topTags = Object.entries(tagCount).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t]) => t)

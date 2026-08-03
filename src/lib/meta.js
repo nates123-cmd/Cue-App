@@ -21,6 +21,17 @@ export function metaFor(type) {
 // Co-viewing partner. Distinct from `recommended_by`.
 export const PARTNER = 'Amanda'
 
+// Ratings are 1..5. Ink's `media_entries` was already CHECK (rating 1..5) while
+// Cue's `recommendations` was CHECK (1..3), so a Cue "3 = loved it" landed in
+// Ink's log as a middling 3. Widening Cue to 5 makes the two agree.
+export const RATING_MAX = 5
+
+const RATING_TONE = ['not for me', 'meh', 'good', 'really good', 'loved it']
+
+export function ratingTone(n) {
+  return RATING_TONE[n - 1] || ''
+}
+
 // Edition + time helpers — drives the auto day/night theme and the masthead.
 export function editionForHour(h) {
   if (h >= 5 && h < 11)  return { edition: 'morning',   label: 'morning',   isPaper: true  }
