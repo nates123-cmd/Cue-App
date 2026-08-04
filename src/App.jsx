@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditionContext } from './lib/EditionContext'
 import { editionForHour, formatClock, PARTNER } from './lib/meta'
 import { initialFulfillment } from './lib/fulfillment'
-import { useItems, pushTarget } from './lib/items'
+import { useItems, pushTarget, toSeason } from './lib/items'
 import { supabase } from './lib/supabase'
 import { backfillMissingImages } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
@@ -197,17 +197,24 @@ export default function App() {
     const ext = item.extension || {}
     const tmdbId = ext.tmdb_id ? Number(ext.tmdb_id) : null
     const year = ext.release_year || ext.first_air_year || ext.published_year || null
+    // Which season Sonarr should go and find. Set by the season picker during TV
+    // enrichment; null means the whole show, which is what every movie and book
+    // is and what TV was before the picker existed.
+    const season = item.type === 'tv' ? toSeason(ext.season) : null
 
     // Don't queue the same title twice. Radarr answers "already in Radarr" on a
     // re-push, so the second row never gets an arr_id and would sit on
     // "Searching" forever as a duplicate. Delete the row from the tray to re-push.
-    const { data: existing } = await supabase
+    // Scoped by season: S1 and S2 of one show are two real requests, so only the
+    // SAME season counts as a duplicate.
+    let dupQuery = supabase
       .from('media_requests')
       .select('id')
       .eq('media_type', target.media_type)
       .eq('title', item.title)
       .neq('status', 'failed')
-      .limit(1)
+    dupQuery = season == null ? dupQuery.is('season', null) : dupQuery.eq('season', season)
+    const { data: existing } = await dupQuery.limit(1)
     if (existing && existing.length > 0) return { duplicate: true }
 
     const { data: inserted, error } = await supabase.from('media_requests').insert({
@@ -215,6 +222,7 @@ export default function App() {
       tmdb_id: item.type === 'book' || !Number.isFinite(tmdbId) ? null : tmdbId,
       title: item.title,
       year: year ? Number(year) : null,
+      season,
       detail: item.type === 'book' && ext.author ? JSON.stringify({ author: ext.author }) : null,
       // Lets the Beelink daemons stamp fulfillment back onto the right card.
       // Matching by title from the box is fuzzy — the importer strips

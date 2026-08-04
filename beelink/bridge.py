@@ -272,20 +272,83 @@ def _sonarr_id(title):
     return None
 
 
+def _req_season(req):
+    """The season number Cue asked for, or None for the whole show.
+
+    Cue's season picker writes media_requests.season during TV enrichment. Old
+    rows (and every movie/book) have no season at all, which has to keep meaning
+    "everything" -- that was the only behaviour before the column existed.
+    """
+    raw = req.get("season")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _monitor_season(series_id, season, exclusive):
+    """Monitor one season on an existing Sonarr series and search for it.
+
+    `exclusive` is for a series we just added (monitor=none): every other season
+    is switched off so only the requested one is wanted. For a series already in
+    the library we ADD monitoring to the target season and leave the rest alone
+    -- silently unmonitoring seasons Nate already asked for would be a rude way
+    to answer "also get me season 3".
+    """
+    if series_id is None or season is None:
+        return
+    code, s = arr(SONARR, "GET", f"series/{series_id}")
+    if code != 200 or not isinstance(s, dict):
+        raise RuntimeError(f"sonarr series/{series_id} read {code}: {s}")
+    found = False
+    for sn in (s.get("seasons") or []):
+        if sn.get("seasonNumber") == season:
+            sn["monitored"] = True
+            found = True
+        elif exclusive:
+            sn["monitored"] = False
+    if not found:
+        raise RuntimeError(f"season {season} not found on '{s.get('title')}'")
+    s["monitored"] = True
+    code, resp = arr(SONARR, "PUT", f"series/{series_id}", s)
+    if code not in (200, 202):
+        raise RuntimeError(f"sonarr monitor season {code}: {resp}")
+    # SeasonSearch, not SeriesSearch: ask the indexers for this season only.
+    code, resp = arr(SONARR, "POST", "command",
+                     {"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": season})
+    if code not in (200, 201):
+        raise RuntimeError(f"sonarr SeasonSearch {code}: {resp}")
+
+
 def add_series(req):
-    """Add a series to Sonarr. Returns (human_msg, sonarr_series_id | None)."""
+    """Add a series to Sonarr. Returns (human_msg, sonarr_series_id | None).
+
+    With req["season"] set, the add is deliberately inert -- monitor "none" and
+    no search -- and _monitor_season then turns on exactly the one season and
+    fires a SeasonSearch. Letting the add search first would pull the whole run
+    before we ever narrowed it, which is the thing the season picker exists to
+    stop.
+    """
+    season = _req_season(req)
     code, res = arr(SONARR, "GET", "series/lookup?term=" + urllib.parse.quote(req["title"]))
     if code != 200:
         raise RuntimeError(f"sonarr lookup {code}: {res}")
     series = best_match(res, req["title"], req.get("year"))
     if not series:
         raise RuntimeError("no sonarr match")
+    whole_show = season is None
     series.update({"qualityProfileId": S_PROFILE, "rootFolderPath": S_ROOT,
                    "monitored": True, "seasonFolder": True,
-                   "addOptions": {"searchForMissingEpisodes": True, "monitor": "all"}})
+                   "addOptions": {"searchForMissingEpisodes": whole_show,
+                                  "monitor": "all" if whole_show else "none"}})
     code, resp = arr(SONARR, "POST", "series", series)
     if code in (200, 201):
         rid = resp.get("id") if isinstance(resp, dict) else None
+        if season is not None:
+            _monitor_season(rid, season, exclusive=True)
+            return f"added to Sonarr: {series.get('title')} S{season}", rid
         return f"added to Sonarr: {series.get('title')}", rid
     if code == 400 and "already" in str(resp).lower():
         rid = None
@@ -294,6 +357,11 @@ def add_series(req):
             c2, lib = arr(SONARR, "GET", f"series?tvdbId={tvdb}")
             if c2 == 200 and isinstance(lib, list) and lib:
                 rid = lib[0].get("id")
+        if season is not None and rid is not None:
+            # Already in the library, but this season may never have been asked
+            # for -- monitor it and search, so the push does something real.
+            _monitor_season(rid, season, exclusive=False)
+            return f"already in Sonarr: {series.get('title')} — searching S{season}", rid
         return f"already in Sonarr: {series.get('title')}", rid
     raise RuntimeError(f"sonarr add {code}: {resp}")
 
