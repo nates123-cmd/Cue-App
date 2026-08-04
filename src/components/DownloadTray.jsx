@@ -82,7 +82,16 @@ function Row({ row, onDelete }) {
           <span style={{
             fontFamily: 'var(--body)', fontSize: 13, color: 'var(--text)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-          }}>{row.title}</span>
+          }}>
+            {row.title}
+            {/* Two rows for one show are two seasons, not a bug — say which. */}
+            {row.season != null && (
+              <span style={{
+                marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9,
+                letterSpacing: '0.1em', color: 'var(--muted)',
+              }}>S{row.season}</span>
+            )}
+          </span>
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.12em',
             textTransform: 'uppercase', color, whiteSpace: 'nowrap', flexShrink: 0,

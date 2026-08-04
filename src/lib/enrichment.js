@@ -3,11 +3,12 @@
 // failure. Never let a bad enrichment block a capture.
 
 import { claudeComplete, extractJSON } from './claude'
+import { toSeason } from './items'
 import { jwLookup } from './justwatch'
 import { openLibraryLookup, openLibrarySearch } from './sources/openlibrary'
 import { googleBooksLookup, googleBooksSearch } from './sources/googlebooks'
 import { openGraphLookup } from './sources/opengraph'
-import { tmdbLookup, tmdbSearch } from './sources/tmdb'
+import { tmdbLookup, tmdbSearch, tmdbSeason, tmdbSeasonList } from './sources/tmdb'
 import { youtubeLookup, youtubeSearch } from './sources/youtube'
 import { musicBrainzLookup, musicBrainzSearch } from './sources/musicbrainz'
 
@@ -47,7 +48,11 @@ Return JSON with this exact shape:
 }
 ${SHARED_RULES}`,
 
-  tv: (title) => `Enrich this TV show: "${title}"
+  tv: (title, season = null) => `Enrich this TV show: "${title}"${season != null ? `
+
+The user is interested in SEASON ${season} specifically. Write the synopsis about
+that season's story, not the series as a whole. Every other field still describes
+the whole series.` : ''}
 
 Return JSON with this exact shape:
 {
@@ -212,7 +217,11 @@ function fallbackCard(title, type) {
   return {
     title,
     type,
+    // Every consumer of an enriched card (DraftCard's editor, items.addItem →
+    // recommendations.summary) reads `enrichment.synopsis`, so the two are kept
+    // in lockstep. Writing only the flat `synopsis` silently drops it on save.
     synopsis: '',
+    enrichment: { synopsis: '' },
     extension: {},
     image_tone: tones[type] || tones.book,
     cover_kind: coverKind,
@@ -309,6 +318,16 @@ function mergeTmdb(merged, tm, type) {
   if (type === 'movie' && tm.director) ext.director = tm.director
   if (type === 'tv' && tm.creator) ext.creator = tm.creator
   if (tm.tmdb_vote != null) ext.tmdb_vote = tm.tmdb_vote
+  // tmdb_id is what the season picker and the *arr push both key on, so it has
+  // to survive onto the saved item, not just live in the merge.
+  if (tm.tmdb_id != null) ext.tmdb_id = tm.tmdb_id
+  // TV season inventory — TMDB counts beat Claude's, and seasons_list is what
+  // the picker renders. Only present on a detail lookup, so guarded.
+  if (type === 'tv') {
+    if (Array.isArray(tm.seasons_list) && tm.seasons_list.length) ext.seasons_list = tm.seasons_list
+    if (tm.seasons) ext.seasons = tm.seasons
+    if (tm.episodes_total) ext.episodes_total = tm.episodes_total
+  }
   return {
     ...merged,
     title: tm.title || merged.title,
@@ -317,6 +336,67 @@ function mergeTmdb(merged, tm, type) {
     extension: ext,
     image_url: tm.image_url || merged.image_url || null,
     _tmdbHit: !!tm.image_url,
+  }
+}
+
+// The merge helpers all write the flat `synopsis`; the UI and the save path both
+// read `enrichment.synopsis`. Reconcile once, at the end of every enrich.
+function syncSynopsis(card) {
+  const synopsis = card.synopsis || card.enrichment?.synopsis || ''
+  return { ...card, synopsis, enrichment: { ...(card.enrichment || {}), synopsis } }
+}
+
+// Stash the show-level synopsis/poster before a season narrows the card, so the
+// season picker can offer "whole show" without paying for another enrich.
+// `_show` is a leading-underscore scratch field — items.addItem ignores it, so
+// it never reaches the database.
+function withShowSnapshot(card) {
+  if (card._show) return card
+  return {
+    ...card,
+    _show: { synopsis: card.synopsis || '', image_url: card.image_url || null },
+  }
+}
+
+// Point a TV card at one season. Show-level facts (network, creator, total
+// seasons, seasons_list) all stay — the season layers its own number, episode
+// count, air year and, when TMDB has them, its own poster and overview on top.
+// `ext.season` is the field App.pushToRadarr sends to Sonarr, so it is stamped
+// even when the TMDB season fetch missed (no key / offline): the number the user
+// picked is still the number the download manager should search for.
+function mergeSeason(merged, s) {
+  if (!s || s.season_number == null) return merged
+  const ext = { ...merged.extension, season: s.season_number }
+  if (s.name) ext.season_name = s.name
+  if (s.episode_count) ext.season_episodes = s.episode_count
+  if (s.year) ext.season_year = s.year
+  const synopsis = s.overview || merged.synopsis || ''
+  return {
+    ...merged,
+    extension: ext,
+    // A season poster is more specific than the show poster when TMDB has one.
+    image_url: s.image_url || merged.image_url || null,
+    synopsis,
+    enrichment: { ...(merged.enrichment || {}), synopsis },
+  }
+}
+
+// Drop back to the whole show: strip every season-scoped field and restore the
+// show-level synopsis/poster captured at enrich time (see `_show`).
+function clearSeason(card) {
+  const ext = { ...(card.extension || {}) }
+  delete ext.season
+  delete ext.season_name
+  delete ext.season_episodes
+  delete ext.season_year
+  const show = card._show || {}
+  const synopsis = show.synopsis ?? card.synopsis ?? ''
+  return {
+    ...card,
+    extension: ext,
+    image_url: show.image_url ?? card.image_url ?? null,
+    synopsis,
+    enrichment: { ...(card.enrichment || {}), synopsis },
   }
 }
 
@@ -394,13 +474,19 @@ function mergeJustWatch(merged, jw, type) {
 // Per-type external source lookups, all run in parallel with Claude. Each
 // promise resolves to null on miss; none throw. Movie/tv fan out to both TMDB
 // (poster + canonical) and JustWatch (streaming + scoring) at once.
-async function gatherSources(type, input) {
+// `season` (tv only) triggers a second, dependent TMDB call — the season detail
+// needs the show's tmdb_id, which only exists once the lookup resolves.
+async function gatherSources(type, input, season = null) {
   if (type === 'movie' || type === 'tv') {
     const [tmdb, jw] = await Promise.all([
       tmdbLookup(input, type).catch(() => null),
       jwLookup(input).catch(() => null),
     ])
-    return { tmdb, jw }
+    let seasonFacts = null
+    if (type === 'tv' && season != null && tmdb?.tmdb_id != null) {
+      seasonFacts = await tmdbSeason(tmdb.tmdb_id, season).catch(() => null)
+    }
+    return { tmdb, jw, season: seasonFacts }
   }
   if (type === 'book') {
     const [gb, ol] = await Promise.all([
@@ -448,25 +534,40 @@ function applyLockedFacts(card, locked, type) {
 // `locked` (optional) is a candidate chosen from searchCandidates(); its
 // disambiguating query drives Claude + the source re-lookup, and its facts are
 // overlaid last so the exact picked item wins.
-export async function enrich(title, type, locked = null) {
+//
+// `opts.season` (tv only) narrows the card to one season: the synopsis becomes
+// that season's, the poster becomes its poster where TMDB has one, and
+// `extension.season` carries the number through to the Sonarr push. Everything
+// else still describes the whole series.
+export async function enrich(title, type, locked = null, opts = {}) {
   const trimmed = (title || '').trim()
   if (!trimmed) return fallbackCard('', type)
 
   const promptFn = PROMPTS[type]
   if (!promptFn) return fallbackCard(trimmed, type)
 
+  const season = type === 'tv' ? toSeason(opts.season) : null
+
   // A locked candidate carries a more specific query (e.g. "title author").
   const queryInput = (locked?.query || trimmed).trim()
   const finalize = (card, srcs) => {
-    const out = applySources(card, srcs, type)
-    return locked ? applyLockedFacts(out, locked, type) : out
+    let out = applySources(card, srcs, type)
+    if (locked) out = applyLockedFacts(out, locked, type)
+    // Snapshot the show-level card BEFORE the season narrows it, so the picker
+    // can switch back to "whole show" without re-enriching.
+    if (type === 'tv') out = withShowSnapshot(out)
+    // Season last: it has to beat both the locked candidate's show poster and
+    // TMDB's show overview. Falls back to the bare number when the season fetch
+    // missed, so the push is still season-specific.
+    if (season != null) out = mergeSeason(out, srcs.season || { season_number: season })
+    return syncSynopsis(out)
   }
 
   // Kick off all type-specific external sources in parallel with Claude.
-  const sourcesPromise = gatherSources(type, queryInput)
+  const sourcesPromise = gatherSources(type, queryInput, season)
 
   try {
-    const raw = await claudeComplete(promptFn(queryInput), {
+    const raw = await claudeComplete(promptFn(queryInput, season), {
       system: SYSTEM,
       max_tokens: 800,
     })
@@ -493,6 +594,38 @@ export async function enrich(title, type, locked = null) {
     const srcs = await sourcesPromise
     return finalize(fallbackCard(trimmed, type), srcs)
   }
+}
+
+// ── seasons ──────────────────────────────────────────────────────────────────
+
+// Every season of a TV card, for the picker. Uses the list TMDB already put on
+// the card during enrichment; falls back to a lookup for older saved items (and
+// for anything captured before seasons existed). Empty array when TMDB can't
+// resolve the show — the picker then simply doesn't render.
+export async function seasonsFor(item) {
+  if (!item || item.type !== 'tv') return []
+  const ext = item.extension || {}
+  if (Array.isArray(ext.seasons_list) && ext.seasons_list.length) return ext.seasons_list
+  const id = ext.tmdb_id ?? (await tmdbLookup(item.title, 'tv').catch(() => null))?.tmdb_id
+  if (id == null) return []
+  return tmdbSeasonList(id).catch(() => [])
+}
+
+// Re-point an already-enriched TV card at `season` (or back to the whole show
+// with null). TMDB-only — no Claude round-trip — so tapping through seasons is
+// one fast request instead of a full re-enrich. Returns the card unchanged for
+// non-TV.
+export async function pickSeason(card, season) {
+  if (!card || card.type !== 'tv') return card
+  // Snapshot first (a card loaded from the DB has no `_show`), then strip any
+  // season already on it so switching S2 → S3 doesn't stack S2's poster.
+  const base = clearSeason(withShowSnapshot(card))
+  const n = toSeason(season)
+  if (n == null) return syncSynopsis(base)
+  const ext = base.extension || {}
+  const id = ext.tmdb_id ?? (await tmdbLookup(base.title, 'tv').catch(() => null))?.tmdb_id
+  const facts = id == null ? null : await tmdbSeason(id, n).catch(() => null)
+  return syncSynopsis(mergeSeason(base, facts || { season_number: n }))
 }
 
 // Top candidate matches for the disambiguation picker. Returns a normalized,

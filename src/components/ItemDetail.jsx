@@ -9,7 +9,8 @@ import {
 import { ratingTone } from '../lib/meta'
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
-import { enrich } from '../lib/enrichment'
+import { enrich, pickSeason, seasonsFor } from '../lib/enrichment'
+import { SeasonPicker } from '../pages/Capture'
 import { fulfillmentBadges } from '../lib/fulfillment'
 import { pushTarget } from '../lib/items'
 
@@ -181,6 +182,8 @@ export const ItemDetail = ({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [pushState, setPushState] = useState(null) // null | 'pushing' | 'sent' | 'error'
+  const [seasons, setSeasons] = useState([])       // TV: TMDB season inventory
+  const [seasonBusy, setSeasonBusy] = useState(false)
   const readOnly = item._source !== 'rec' // media/visit-derived items are read-only
 
   // Fetch cover art + where-to-watch (and other type facts) for this item on
@@ -208,6 +211,37 @@ export const ItemDetail = ({
       setEnriching(false)
     }
   }
+  // TV only: load the season list once the sheet opens, so the picker is there
+  // without a tap. Items saved before seasons existed carry no seasons_list, so
+  // seasonsFor falls back to a TMDB lookup; a miss just leaves the picker hidden.
+  useEffect(() => {
+    let live = true
+    if (!item || item.type !== 'tv') { setSeasons([]); return () => { live = false } }
+    seasonsFor(item)
+      .then((list) => { if (live) setSeasons(list) })
+      .catch(() => { if (live) setSeasons([]) })
+    return () => { live = false }
+  }, [item?.id, item?.type])
+
+  // Narrow this saved item to one season (or back to the whole show) and persist
+  // it, so the next push to Sonarr asks for that season.
+  const changeSeason = async (n) => {
+    if (readOnly || seasonBusy || !onPatch) return
+    setSeasonBusy(true)
+    try {
+      const next = await pickSeason(item, n)
+      const patch = { extension: next.extension || {} }
+      if (next.image_url) patch.image_url = next.image_url
+      if (next.enrichment?.synopsis) patch.enrichment = next.enrichment
+      onPatch(item, patch)
+      setPushState(null) // a different season is a different request
+    } catch (e) {
+      console.warn('season change failed', e)
+    } finally {
+      setSeasonBusy(false)
+    }
+  }
+
   // Queue this movie/TV item for download on the home *arr stack (Radarr/Sonarr)
   // via the media_requests outbox. A poller on the server picks it up.
   const runPush = async () => {
@@ -225,7 +259,14 @@ export const ItemDetail = ({
   const ext = item.extension || {}
   const meta = []
   if (item.type === 'book') meta.push(ext.author, ext.published_year, ext.page_count && `${ext.page_count} pp`)
-  if (item.type === 'tv') meta.push(ext.network_or_service, ext.seasons && `${ext.seasons} season${(ext.seasons || 1) > 1 ? 's' : ''}`, ext.runtime_per_ep && `${ext.runtime_per_ep} min/ep`)
+  if (item.type === 'tv') meta.push(
+    ext.network_or_service,
+    // Once a season is picked it, not the series-wide count, is the headline.
+    ext.season != null
+      ? [`S${ext.season}`, ext.season_year, ext.season_episodes && `${ext.season_episodes} eps`].filter(Boolean).join(' · ')
+      : ext.seasons && `${ext.seasons} season${(ext.seasons || 1) > 1 ? 's' : ''}`,
+    ext.runtime_per_ep && `${ext.runtime_per_ep} min/ep`,
+  )
   if (item.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (item.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (item.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
@@ -321,6 +362,16 @@ export const ItemDetail = ({
               forgets a finished push after a day, this doesn't. */}
           <FulfillmentPanel item={item} />
 
+          {/* Pick the season BEFORE pushing — it's what Sonarr goes and finds. */}
+          {item.type === 'tv' && !readOnly && seasons.length > 0 && (
+            <SeasonPicker
+              seasons={seasons}
+              value={ext.season ?? null}
+              busy={seasonBusy}
+              onPick={changeSeason}
+            />
+          )}
+
           {pushTarget(item.type) && onPushToRadarr && (
             <button onClick={runPush} disabled={pushState === 'pushing' || pushState === 'sent'} style={{
               ...btnGhost, alignSelf: 'flex-start',
@@ -330,10 +381,17 @@ export const ItemDetail = ({
               ...(pushState === 'sent' ? { borderColor: 'var(--signal)', color: 'var(--signal)' } : {}),
             }}>
               <span style={{ fontSize: 11 }}>➤</span>
-              {pushState === 'pushing' ? 'Sending…'
-                : pushState === 'sent' ? `Queued in ${pushTarget(item.type).app} ✓`
-                : pushState === 'error' ? 'Failed — tap to retry'
-                : `Push to ${pushTarget(item.type).app}`}
+              {(() => {
+                const arr = pushTarget(item.type).app
+                // Name the scope: S3 vs the whole run is 10 episodes vs 80.
+                const scope = item.type === 'tv'
+                  ? (ext.season != null ? ` · S${ext.season}` : ' · all seasons')
+                  : ''
+                if (pushState === 'pushing') return 'Sending…'
+                if (pushState === 'sent') return `Queued in ${arr}${scope} ✓`
+                if (pushState === 'error') return 'Failed — tap to retry'
+                return `Push to ${arr}${scope}`
+              })()}
             </button>
           )}
 

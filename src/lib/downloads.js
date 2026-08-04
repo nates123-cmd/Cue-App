@@ -69,7 +69,9 @@ function score(row) {
 export function dedupeRows(rows) {
   const groups = new Map()
   for (const r of rows) {
-    const key = `${(r.title || '').toLowerCase()}|${r.media_type}`
+    // Season is part of the identity: S1 and S2 of one show are two separate
+    // downloads, so collapsing them into one row would hide half the work.
+    const key = `${(r.title || '').toLowerCase()}|${r.media_type}|${r.season ?? ''}`
     const g = groups.get(key)
     if (!g) {
       groups.set(key, { ...r, ids: [r.id] })
@@ -92,7 +94,7 @@ export function useDownloads() {
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from('media_requests')
-      .select('id,title,media_type,status,detail,requested_at,processed_at')
+      .select('id,title,media_type,season,status,detail,requested_at,processed_at')
       .order('requested_at', { ascending: false })
       .limit(40)
     if (!error && data) {

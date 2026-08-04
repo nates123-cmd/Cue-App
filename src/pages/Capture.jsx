@@ -29,6 +29,44 @@ export const TypeChip = ({ type, active, onClick }) => (
   </button>
 )
 
+// Which season of a show to pull down. Only meaningful for TV, and only when
+// TMDB gave us a season list. "Whole show" is the default (null) — same
+// behaviour Cue had before seasons existed. Picking a season narrows the card's
+// synopsis/poster AND is what the Sonarr push searches for, which is the whole
+// point: the download manager needs the number.
+export const SeasonPicker = ({ seasons, value = null, busy = false, onPick }) => {
+  if (!Array.isArray(seasons) || seasons.length === 0) return null
+  const opts = [{ season_number: null, name: 'Whole show' }, ...seasons]
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <Mono size={9} dim>Season {busy ? '· loading…' : '· what to download'}</Mono>
+      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
+        {opts.map((s) => {
+          const active = (s.season_number ?? null) === (value ?? null)
+          const label = s.season_number == null ? 'Whole show' : `S${s.season_number}`
+          return (
+            <button
+              key={s.season_number ?? 'all'}
+              disabled={busy}
+              onClick={() => onPick && onPick(s.season_number ?? null)}
+              title={s.season_number == null ? 'Whole show' : [s.name, s.year, s.episode_count && `${s.episode_count} eps`].filter(Boolean).join(' · ')}
+              style={{
+                appearance: 'none', cursor: busy ? 'wait' : 'pointer', flex: '0 0 auto',
+                padding: '5px 10px', borderRadius: 2,
+                background: active ? 'color-mix(in oklab, var(--signal) 16%, transparent)' : 'transparent',
+                border: `1px solid ${active ? 'var(--signal)' : 'var(--hairline-strong)'}`,
+                color: active ? 'var(--signal)' : 'var(--muted)',
+                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
+                opacity: busy && !active ? 0.5 : 1, transition: 'all 160ms ease',
+              }}
+            >{label}</button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 const FieldReveal = ({ delay = 0, children, style = {} }) => (
   <div style={{
     opacity: 0, transform: 'translateY(8px)',
@@ -64,7 +102,10 @@ export const Enriching = ({ title }) => (
   </div>
 )
 
-export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false, error = null, onBack, onPush = null, pushState = null }) => {
+export const DraftCard = ({
+  draft, onChange, onConfirm, onAnother, busy = false, error = null, onBack,
+  onPush = null, pushState = null, onPickSeason = null, seasonBusy = false,
+}) => {
   const ext = draft.extension || {}
   const patch = (k, v) => onChange && onChange({ ...draft, [k]: v })
   const patchEnrichment = (v) => onChange && onChange({
@@ -72,7 +113,15 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
   })
   const meta = []
   if (draft.type === 'book') meta.push(ext.author, ext.published_year, ext.page_count && `${ext.page_count} pp`)
-  if (draft.type === 'tv') meta.push(ext.network_or_service, ext.seasons && `${ext.seasons} season${ext.seasons > 1 ? 's' : ''}`, ext.runtime_per_ep && `~${ext.runtime_per_ep} min`)
+  if (draft.type === 'tv') meta.push(
+    ext.network_or_service,
+    // A picked season replaces the series-wide season count — once you've said
+    // "S3", "5 seasons" is noise and "S3 · 2024 · 10 eps" is the answer.
+    ext.season != null
+      ? [`S${ext.season}`, ext.season_year, ext.season_episodes && `${ext.season_episodes} eps`].filter(Boolean).join(' · ')
+      : ext.seasons && `${ext.seasons} season${ext.seasons > 1 ? 's' : ''}`,
+    ext.runtime_per_ep && `~${ext.runtime_per_ep} min`,
+  )
   if (draft.type === 'movie') meta.push(ext.director, ext.release_year, ext.runtime_min && `${ext.runtime_min} min`)
   if (draft.type === 'article') meta.push(ext.source, ext.author, ext.est_read_min && `${ext.est_read_min} min read`, ext.word_count && `${ext.word_count.toLocaleString()} words`)
   if (draft.type === 'video') meta.push(ext.channel, ext.duration_min && `${ext.duration_min} min`)
@@ -148,6 +197,16 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
             />
           </div>
         </FieldReveal>
+        {draft.type === 'tv' && onPickSeason && (
+          <FieldReveal delay={540}>
+            <SeasonPicker
+              seasons={ext.seasons_list}
+              value={ext.season ?? null}
+              busy={seasonBusy}
+              onPick={onPickSeason}
+            />
+          </FieldReveal>
+        )}
         {(draft.type === 'movie' || draft.type === 'tv') && ext.rt_critics != null && (
           <FieldReveal delay={580}>
             <RottenScore critics={ext.rt_critics} audience={ext.rt_audience} />
@@ -205,6 +264,9 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
           {onPush && pushTarget(draft.type) && (() => {
             const arr = pushTarget(draft.type).app
             const pushing = pushState === 'pushing', sent = pushState === 'sent'
+            // Say out loud what's being requested — pushing S3 vs the whole run
+            // is the difference between 10 episodes and 80.
+            const scope = draft.type === 'tv' ? (ext.season != null ? ` · S${ext.season}` : ' · all seasons') : ''
             return (
               <button onClick={onPush} disabled={busy || pushing || sent} style={{
                 ...btnGhost, width: '100%', marginBottom: 8,
@@ -212,7 +274,7 @@ export const DraftCard = ({ draft, onChange, onConfirm, onAnother, busy = false,
                 opacity: pushing ? 0.6 : 1,
                 ...(sent ? { borderColor: 'var(--signal)', color: 'var(--signal)' } : {}),
               }}>
-                {pushing ? 'Sending…' : sent ? `Queued in ${arr} ✓` : `Add & push to ${arr}`}
+                {pushing ? 'Sending…' : sent ? `Queued in ${arr}${scope} ✓` : `Add & push to ${arr}${scope}`}
               </button>
             )
           })()}

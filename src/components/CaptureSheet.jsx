@@ -11,7 +11,7 @@ import { BulkImport } from './BulkImport'
 import { DraftCard, MatchPicker, Enriching, TypeChip } from '../pages/Capture'
 import { TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
-import { enrich, searchCandidates, searchCandidatesAuto } from '../lib/enrichment'
+import { enrich, pickSeason, searchCandidates, searchCandidatesAuto } from '../lib/enrichment'
 
 export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommenders = [], partner = 'Amanda' }) => {
   const ed = useEdition()
@@ -30,6 +30,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState(null)
   const [pushState, setPushState] = useState(null)  // null | pushing | sent | error
+  const [seasonBusy, setSeasonBusy] = useState(false)  // TV season swap in flight
   // iOS soft keyboard overlays fixed-bottom elements. Track visualViewport so
   // the sheet lifts above the keyboard and caps its height to the visible area,
   // keeping the type chips + Enrich button reachable (scroll handles the rest).
@@ -53,7 +54,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
     if (!open) {
       setMode('single'); setTitle(''); setType('book'); setAuto(true); setRecommendedBy('me')
       setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
-      setEnrichingTitle(''); setSaving(false); setSaveErr(null); setPushState(null)
+      setEnrichingTitle(''); setSaving(false); setSaveErr(null); setPushState(null); setSeasonBusy(false)
     }
   }, [open])
 
@@ -101,6 +102,25 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
     setPickedKey(cand.key); setType(cand.type); setPhase('enriching'); setDraft(null)
     const enriched = await enrich(cand.title, cand.type, cand)
     setDraft(decorate(enriched)); setPhase('draft')
+  }
+
+  // TV only: narrow the card to one season (or back to the whole show). This is
+  // a TMDB-only swap — no Claude re-enrich — so the card stays put and just
+  // updates in place instead of bouncing through the Enriching state.
+  const changeSeason = async (n) => {
+    if (!draft || seasonBusy) return
+    setSeasonBusy(true)
+    try {
+      // pickSeason spreads the existing card, so recommended_by / with / status
+      // ride along — no decorate(), which would stomp edits made in the card.
+      setDraft(await pickSeason(draft, n))
+      // A season change is a different request; let it be pushed again.
+      setPushState(null)
+    } catch (e) {
+      setSaveErr(e?.message || 'Could not load that season.')
+    } finally {
+      setSeasonBusy(false)
+    }
   }
 
   const backToEdit = () => { setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false); setSaveErr(null) }
@@ -260,7 +280,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
             }}>
               {phase === 'enriching'
                 ? <Enriching title={enrichingTitle || title} />
-                : <DraftCard draft={draft} onChange={updateDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} onPush={onPushToRadarr ? pushToRadarr : null} pushState={pushState} />}
+                : <DraftCard draft={draft} onChange={updateDraft} onConfirm={confirm} onAnother={resetForAnother} busy={saving} error={saveErr} onBack={closeDraft} onPush={onPushToRadarr ? pushToRadarr : null} pushState={pushState} onPickSeason={changeSeason} seasonBusy={seasonBusy} />}
             </div>
           </div>
         </>

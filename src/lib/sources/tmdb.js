@@ -49,6 +49,24 @@ function resultToFacts(r, type) {
   if (type === 'tv' && Array.isArray(r.created_by) && r.created_by.length) {
     creator = r.created_by.map((c) => c?.name).filter(Boolean)[0] || null
   }
+  // Season inventory (tv, detail-only). Drives the season picker AND the
+  // season-specific push to Sonarr. Season 0 is TMDB's "Specials" bucket —
+  // dropped, since "which season do I want downloaded" never means specials.
+  let seasonsList = null
+  let seasonCount = null
+  let episodesTotal = null
+  if (type === 'tv') {
+    if (Array.isArray(r.seasons) && r.seasons.length) {
+      const list = r.seasons
+        .filter((s) => s && Number.isFinite(s.season_number) && s.season_number > 0)
+        .map((s) => seasonToFacts(s))
+      if (list.length) seasonsList = list
+    }
+    seasonCount = typeof r.number_of_seasons === 'number'
+      ? r.number_of_seasons
+      : (seasonsList ? seasonsList.length : null)
+    episodesTotal = typeof r.number_of_episodes === 'number' ? r.number_of_episodes : null
+  }
   return {
     title: (type === 'movie' ? r.title : r.name) || null,
     year: yearOf(dateField),
@@ -62,6 +80,28 @@ function resultToFacts(r, type) {
     genre: genres && genres.length ? genres[0] : null,
     director,
     creator,
+    seasons_list: seasonsList,
+    seasons: seasonCount,
+    episodes_total: episodesTotal,
+  }
+}
+
+// One TMDB season object (from /tv/{id} `seasons[]` or /tv/{id}/season/{n}) →
+// the shape the season picker and the season merge both consume.
+function seasonToFacts(s) {
+  if (!s) return null
+  const n = Number(s.season_number)
+  return {
+    season_number: Number.isFinite(n) ? n : null,
+    name: s.name || (Number.isFinite(n) ? `Season ${n}` : null),
+    // The list payload carries `episode_count`; the detail payload carries the
+    // full `episodes` array instead.
+    episode_count: typeof s.episode_count === 'number'
+      ? s.episode_count
+      : (Array.isArray(s.episodes) ? s.episodes.length : null),
+    year: yearOf(s.air_date),
+    overview: s.overview || null,
+    image_url: s.poster_path ? IMG(s.poster_path, 'w500') : null,
   }
 }
 
@@ -127,6 +167,30 @@ export async function tmdbSearch(title, type, n = 6) {
   } catch {
     return []
   }
+}
+
+// ── seasons ──────────────────────────────────────────────────────────────────
+
+// One season's own facts: its poster, air year, episode count and overview.
+// This is the call that makes a TV push specific — the returned `season_number`
+// is what the media-bridge hands Sonarr. Null on miss / no key / bad number.
+export async function tmdbSeason(id, seasonNumber) {
+  const n = Number(seasonNumber)
+  if (!API_KEY || id == null || !Number.isFinite(n)) return null
+  const params = new URLSearchParams({ api_key: API_KEY, language: 'en-US' })
+  const res = await fetch(`${BASE}/tv/${id}/season/${n}?${params}`).catch(() => null)
+  if (!res || !res.ok) return null
+  const s = await res.json().catch(() => null)
+  if (!s) return null
+  const facts = seasonToFacts({ ...s, season_number: s.season_number ?? n })
+  return facts?.season_number == null ? null : facts
+}
+
+// Every season of a show, for the picker. Empty array on miss / no key.
+export async function tmdbSeasonList(id) {
+  const detail = await tmdbDetail(id, 'tv').catch(() => null)
+  if (!detail) return []
+  return resultToFacts(detail, 'tv')?.seasons_list || []
 }
 
 // ── recommendations engine helpers ───────────────────────────────────────────

@@ -31,6 +31,20 @@ function normalizeType(t) {
 // movie→Radarr, tv→Sonarr, book→Prowler. Returns null for types with no
 // download target. `media_type` is the value written to the `media_requests`
 // row the Beelink poller reads to route the request.
+// Normalize a season value to "a number, or null for the whole show".
+//
+// Worth a named helper rather than an inline check: Number(null) is 0 and
+// Number('') is 0, so the obvious `Number.isFinite(Number(v))` test quietly
+// turns "no season" into "season 0" — which Sonarr reads as Specials. Null,
+// undefined and empty string all have to mean the whole show, since that is
+// what every movie, every book, and every TV row written before the season
+// picker existed carries.
+export function toSeason(v) {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 export function pushTarget(type) {
   if (type === 'movie') return { app: 'Radarr', media_type: 'movie' }
   if (type === 'tv') return { app: 'Sonarr', media_type: 'tv' }
