@@ -4,8 +4,13 @@ description: >
   Check and steer Nate's home media stack (Jellyfin, Sonarr, Radarr, Prowlarr,
   qBittorrent behind the VPN). Use this for "what's downloading", "is anything
   stuck", "why is X taking so long", "that's the wrong file, get a better one",
-  "is season 3 done yet", and container health or logs. Talks to a bearer-gated
-  local helper; never touches Docker or the *arr APIs directly.
+  "is season 3 done yet", "what am I waiting on" / "what's still missing" when
+  the subject is shows, movies or books, and container health or logs. Talks to
+  a bearer-gated local helper; never touches Docker or the *arr APIs directly.
+  SCOPE: downloads and media only. Questions about tasks, projects, meetings or
+  the inbox belong to course-plus, not here -- "waiting on" a person or a
+  deliverable is never this skill. If it is genuinely unclear which is meant,
+  ask which one rather than answering from both.
 ---
 
 # Media stack
