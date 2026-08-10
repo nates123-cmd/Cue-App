@@ -78,9 +78,14 @@ curl -s -H "Authorization: Bearer $OPENCLAW_MEDIA_SECRET" \
 helper returns 409 with a `candidates` list: ask Nate which one, do not guess.
 
 Present them as a short numbered list: seeders, size, quality, and the release
-name. **Seeders are what matter.** This connection has no forwarded port, so
-only peers with open ports are reachable. Anything under ~10 seeders is a
-coin flip; single-digit seeders is usually why something took all night.
+name. **Seeders are what matter**, but read them sceptically: Knaben's counts
+are unreliable and routinely understate a swarm. Prefer a release another
+indexer also lists.
+
+The VPN forwards a port (AirVPN, 9199), so incoming connections work and small
+swarms are far more viable than they used to be. A single-digit-seeder release
+is no longer automatically doomed. If something still will not move, the
+problem is that specific swarm, not the connection.
 
 **2. Grab the one he picks**
 ```sh
