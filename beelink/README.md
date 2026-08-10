@@ -86,3 +86,22 @@ owns `ebook`/`audiobook`/`download`, the poller owns `place`.
 - **Read-modify-write on `media_requests.detail` races the tick loop.** Stop the
   service before hand-editing that JSON, or an in-flight tick will overwrite you
   (this is how a book got emailed to the Kindle twice).
+
+## OpenClaw media skill (added 2026-08-10)
+
+Steering downloads from the phone. Same "copy of record" rule as above: these
+run on the box, this directory is the version-controlled copy.
+
+| File | On the box | What it owns |
+|---|---|---|
+| `media_helper.py` | `/opt/media-helper/media_helper.py`, `media-helper.service` (root-installed, bearer-gated, binds the Tailscale IP) | `/status` `/logs` `/restart` `/torrents` `/queue` `/wanted` `/releases` `/pick` `/drop` for the seven whitelisted media containers |
+| `openclaw-media-stack-SKILL.md` | `/home/openclaw/.openclaw/skills/media-stack/SKILL.md` | what the Telegram bot knows about downloads |
+| `install-dl-skill.sh` | `~/install-dl-skill.sh` | installs both of the above; run `sudo bash ~/install-dl-skill.sh` |
+
+`pick` and `drop` only accept identifiers `/releases` and `/queue` just handed
+out, so the agent cannot reach anything it was not shown. Credentials are read
+from `bridge.env` / `/etc/media-helper.env` at runtime and are never in git.
+
+Editing the skill means re-running the installer: the file is bind-mounted, so
+the gateway needs a `docker compose restart` to re-read it, which the installer
+does.

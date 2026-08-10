@@ -13,7 +13,7 @@ then keeps updating that same row so the app can show a live download status:
 It also reaps downloads that stall with no connections (blocklist + re-search the
 next release). Pure stdlib so no venv/pip needed.
 """
-import json, os, time, io, re, zipfile, smtplib, urllib.request, urllib.error, urllib.parse
+import json, os, time, io, re, zipfile, smtplib, difflib, urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone
 from email.message import EmailMessage
 # NB: import the class, not the module -- this file defines a function named http(),
@@ -38,16 +38,54 @@ EBOOK_DIR        = os.environ.get("EBOOK_DIR", "/srv/media/data/media/ebooks")
 
 # Ebooks get emailed to the Kindle once they land. Blank = feature off (books
 # still download and land in EBOOK_DIR, they just don't get sent).
+# KINDLE_EMAIL is the DEFAULT device only. Each requester can own a different
+# Kindle: user_settings key "kindle_email" wins per user_id (see
+# kindle_for_user). The household shares one sender, so a book Amanda asks for
+# in Cue lands on Amanda's Kindle, not Nate's.
 KINDLE_EMAIL       = os.environ.get("KINDLE_EMAIL", "")          # <random>@kindle.com
 GMAIL_USER         = os.environ.get("GMAIL_USER", "")            # must be an Amazon-approved sender
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 KINDLE_MAX_MB      = float(os.environ.get("KINDLE_MAX_MB", "24"))  # gmail attachment ceiling
+# KINDLE_EMAIL is ONE person's device. Everyone else needs their own
+# `kindle_email` setting -- falling back would post their books to his Kindle.
+# Blank = treat KINDLE_EMAIL as everyone's (single-user behaviour).
+KINDLE_OWNER_ID    = os.environ.get("KINDLE_OWNER_ID", "")
 R_PROFILE = int(os.environ.get("RADARR_PROFILE", "4"))
 R_ROOT    = os.environ.get("RADARR_ROOT", "/data/media/movies")
 S_PROFILE = int(os.environ.get("SONARR_PROFILE", "4"))
 S_ROOT    = os.environ.get("SONARR_ROOT", "/data/media/shows")
 INTERVAL  = int(os.environ.get("POLL_INTERVAL", "20"))
 STALL_GRACE = int(os.environ.get("STALL_GRACE", "180"))  # secs a download may sit stalled before reaping
+META_GRACE  = int(os.environ.get("META_GRACE", "600"))   # secs a magnet may sit at metaDL (DHT is slow)
+DEAD_GRACE  = int(os.environ.get("DEAD_GRACE", "300"))   # secs a zero-seeder swarm gets before reaping
+
+# Telegram push. Same bot as the rain alerts (@Nate_beelink_bot). SEND ONLY --
+# OpenClaw long-polls this token, and a second getUpdates consumer would steal
+# its messages. Anything conversational belongs in the OpenClaw media skill.
+TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
+TG_CHAT  = os.environ.get("TG_CHAT_ID", "")
+_tg_sent = {}                                            # dedupe key -> last send epoch
+TG_REPEAT = int(os.environ.get("TG_REPEAT", "21600"))     # don't repeat the same alert for 6h
+
+
+def tg(text, key=None):
+    """Best-effort Telegram push. Never raises; the poll loop must not care."""
+    if not TG_TOKEN or not TG_CHAT:
+        return
+    now = time.time()
+    if key:
+        if now - _tg_sent.get(key, 0) < TG_REPEAT:
+            return
+        _tg_sent[key] = now
+    try:
+        data = urllib.parse.urlencode({
+            "chat_id": TG_CHAT, "text": text,
+            "disable_web_page_preview": "true"}).encode()
+        urllib.request.urlopen(
+            urllib.request.Request(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                                   data=data), timeout=15).read()
+    except Exception as e:
+        log("telegram push failed", repr(e))
 
 # Audiobookshelf: the bridge writes a listen position when Cue's "resume in audio"
 # feature fires (audio_seek_requests outbox). Blank token = feature off.
@@ -177,13 +215,21 @@ def kick_cwa_ingest():
 X4PUSH = os.environ.get("X4PUSH", "/home/nate/apps/x4push/x4push.py")
 
 
-def queue_for_x4(path, rec_id=None):
+# The X4 belongs to one person. Other household members request books too, and
+# their books must not land on his e-reader. Blank = queue everything, which is
+# how this behaved before there was a second requester.
+X4_OWNER_ID = os.environ.get("X4_OWNER_ID", "")
+
+
+def queue_for_x4(path, rec_id=None, user_id=None):
     """Queue an imported epub for delivery to the Xteink X4. Best effort.
 
     Enqueue is idempotent on the source path, so a repeated tick is a no-op.
     """
     if not path or not os.path.exists(X4PUSH):
         return False
+    if X4_OWNER_ID and user_id and user_id != X4_OWNER_ID:
+        return False                        # someone else's book, not for this device
     try:
         import subprocess
         cmd = [X4PUSH, "enqueue", path] + ([rec_id] if rec_id else [])
@@ -196,18 +242,104 @@ def queue_for_x4(path, rec_id=None):
         return False
 
 
+MATCH_MIN_SIM = float(os.environ.get("MATCH_MIN_SIM", "0.75"))
+MATCH_AMBIG_DELTA = float(os.environ.get("MATCH_AMBIG_DELTA", "0.05"))
+
+
+def _norm_title(s):
+    """lowercase, drop punctuation/年-parens, collapse whitespace."""
+    s = (s or "").lower()
+    s = re.sub(r"\(\s*\d{4}\s*\)", " ", s)      # drop "(2021)"
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+def _title_variants(title):
+    """'Untold: Chess Mates' -> ['untold chess mates', 'untold'] (series before the colon)."""
+    out, full = [], _norm_title(title)
+    if full:
+        out.append(full)
+    for sep in (":", " - ", " \u2013 "):
+        if sep in (title or ""):
+            head = _norm_title((title or "").split(sep)[0])
+            if head and head not in out:
+                out.append(head)
+            break
+    return out
+
+
+def _score(cand_title, variants):
+    c = _norm_title(cand_title)
+    if not c:
+        return 0.0
+    best = 0.0
+    for v in variants:
+        if c == v:
+            return 1.0
+        r = difflib.SequenceMatcher(None, c, v).ratio()
+        # a candidate that fully contains the requested series name scores well
+        if v and (c.startswith(v + " ") or c == v):
+            r = max(r, 0.9)
+        best = max(best, r)
+    return best
+
+
+
+def _lookup_terms(title):
+    """Search terms to try, most specific first: full title, then series-only."""
+    terms, t = [], (title or "").strip()
+    if t:
+        terms.append(t)
+    for sep in (":", " - "):
+        if sep in t:
+            head = t.split(sep)[0].strip()
+            if head and head not in terms:
+                terms.append(head)
+            break
+    return terms
+
+
 def best_match(results, title, year):
+    """Title-first match. Returns None when nothing is confidently the request.
+
+    Never falls back to results[0], and never matches on year alone: a
+    wrong-but-plausible match silently downloads an entire wrong series
+    (this is exactly how 'Untold: Chess Mates' became Soul Mate (2026)).
+
+    Year is used only to break a tie between candidates that ALREADY match
+    the title. If the title is ambiguous, we refuse and say so - a refused
+    request is a message to a human; a wrong one is 8 episodes of garbage.
+    """
     if not results:
         return None
-    if year:
-        for r in results:
-            if r.get("year") == year:
-                return r
-    tl = (title or "").lower()
-    for r in results:
-        if (r.get("title") or "").lower() == tl:
-            return r
-    return results[0]
+    variants = _title_variants(title)
+    if not variants:
+        return None
+
+    scored = sorted(((_score(r.get("title"), variants), r) for r in results),
+                    key=lambda t: -t[0])
+    top_s = scored[0][0]
+    if top_s < MATCH_MIN_SIM:
+        log(f"best_match: no confident match for {title!r} "
+            f"(best {scored[0][1].get('title')!r} @ {top_s:.2f} < {MATCH_MIN_SIM})")
+        return None
+
+    contenders = [r for s, r in scored if top_s - s < MATCH_AMBIG_DELTA]
+    if len(contenders) > 1:
+        if year:
+            by_year = [r for r in contenders if r.get("year") == year]
+            if len(by_year) == 1:
+                log(f"best_match: {title!r} -> {by_year[0].get('title')!r} "
+                    f"({year}) @ {top_s:.2f} (year broke a {len(contenders)}-way tie)")
+                return by_year[0]
+        names = ", ".join(f"{r.get('title')!r} ({r.get('year')})" for r in contenders[:4])
+        log(f"best_match: ambiguous for {title!r} - {len(contenders)} candidates "
+            f"[{names}] - refusing to guess; set the provider id on the Cue card")
+        return None
+
+    log(f"best_match: {title!r} -> {contenders[0].get('title')!r} "
+        f"({contenders[0].get('year')}) @ {top_s:.2f}")
+    return contenders[0]
 
 
 def add_movie(req):
@@ -224,7 +356,9 @@ def add_movie(req):
             raise RuntimeError(f"radarr lookup {code}: {res}")
         movie = best_match(res, req["title"], req.get("year"))
         if not movie:
-            raise RuntimeError("no radarr match")
+            raise RuntimeError(
+                f"no confident Radarr match for {req['title']!r} - refusing to add a "
+                f"guessed movie (set the tmdb id on the Cue card to force it)")
     movie.update({"qualityProfileId": R_PROFILE, "rootFolderPath": R_ROOT,
                   "monitored": True, "minimumAvailability": "released",
                   "addOptions": {"searchForMovie": True}})
@@ -332,12 +466,19 @@ def add_series(req):
     stop.
     """
     season = _req_season(req)
-    code, res = arr(SONARR, "GET", "series/lookup?term=" + urllib.parse.quote(req["title"]))
-    if code != 200:
-        raise RuntimeError(f"sonarr lookup {code}: {res}")
-    series = best_match(res, req["title"], req.get("year"))
+    series = None
+    for term in _lookup_terms(req["title"]):
+        code, res = arr(SONARR, "GET", "series/lookup?term=" + urllib.parse.quote(term))
+        if code != 200:
+            raise RuntimeError(f"sonarr lookup {code}: {res}")
+        series = best_match(res, req["title"], req.get("year"))
+        if series:
+            break
+        log(f"sonarr lookup: no confident match on term {term!r}")
     if not series:
-        raise RuntimeError("no sonarr match")
+        raise RuntimeError(
+            f"no confident Sonarr match for {req['title']!r} - refusing to add a "
+            f"guessed series (set the tvdb id on the Cue card to force it)")
     whole_show = season is None
     series.update({"qualityProfileId": S_PROFILE, "rootFolderPath": S_ROOT,
                    "monitored": True, "seasonFolder": True,
@@ -719,6 +860,16 @@ def add_book(req):
         ("ebook", EBOOK_CATS, EBOOK_FORMATS, True),      # must say epub/mobi/azw3/pdf
         ("audiobook", AUDIO_CATS, AUDIO_FORMATS, False), # category alone is enough
     ):
+        # Already on the shared shelf -> no torrent, no Libgen. Marked
+        # imported so monitor_books mails it to this requester's Kindle on the
+        # next tick, and shelved so it is not re-offered to CWA/Place/the X4,
+        # which all saw it when the first copy landed.
+        onshelf = shelf_copy(title, kind)
+        if onshelf:
+            grabbed[kind] = {"shelf": True, "imported": True, "shelved": True,
+                             "path": onshelf if kind == "ebook" else None}
+            log(f"book '{title}': {kind} already on shelf -> {onshelf}")
+            continue
         rel = _pick_release(_search_books(title, author, cats), title, formats, require)
         if not rel:
             tried.append(f"no {kind} torrent")
@@ -750,8 +901,11 @@ def add_book(req):
 
     if not grabbed:
         raise RuntimeError("no book found (" + ", ".join(tried) + ")")
-    got = " + ".join(sorted(grabbed))
-    return f"grabbed {got} for {title}", {"books": grabbed, "missing": missing}
+    fresh = sorted(k for k, v in grabbed.items() if not v.get("shelf"))
+    onshelf = sorted(k for k, v in grabbed.items() if v.get("shelf"))
+    parts = ([f"grabbed {' + '.join(fresh)}"] if fresh else []) + \
+            ([f"already on shelf: {' + '.join(onshelf)}"] if onshelf else [])
+    return f"{'; '.join(parts)} for {title}", {"books": grabbed, "missing": missing}
 
 
 # --- import: hardlink finished torrents into the library --------------------
@@ -763,37 +917,84 @@ def _host_path(container_path):
     return container_path
 
 
-def _link_into(src_host, dest_dir):
-    """Hardlink src (file or dir) under dest_dir so the torrent keeps seeding."""
-    os.makedirs(dest_dir, exist_ok=True)
+BOOK_EXT    = {".epub", ".mobi", ".azw", ".azw3", ".pdf", ".cbz", ".cbr", ".djvu", ".fb2"}
+AUDIO_EXT   = {".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wav", ".wma"}
+# Never hardlinked into the library, whatever the release claims to be. A book
+# torrent whose only payload is an 850 MB .exe is malware wearing a book's name
+# (2026-08-08: one reached the Audiobookshelf shelf as "The Stench of Honolulu").
+HOSTILE_EXT = {".exe", ".scr", ".msi", ".bat", ".cmd", ".com", ".pif", ".vbs",
+               ".vbe", ".js", ".jse", ".wsf", ".ps1", ".jar", ".apk", ".dmg",
+               ".iso", ".lnk", ".reg", ".hta"}
+
+
+def _ext(p):
+    return os.path.splitext(p)[1].lower()
+
+
+def _wanted_ext(kind):
+    """Audiobook bundles routinely ship the ebook alongside, so accept both."""
+    return BOOK_EXT if kind == "ebook" else (AUDIO_EXT | BOOK_EXT)
+
+
+def _link_into(src_host, dest_dir, kind):
+    """Hardlink src (file or dir) under dest_dir so the torrent keeps seeding.
+
+    Returns (files_linked, hostile_paths). Refuses outright -- linking nothing,
+    not even creating dest_dir -- if the release contains no file that is
+    actually a book or audiobook. That empty-handed case is what let a fake
+    release create a phantom library folder.
+    """
     if os.path.isfile(src_host):
-        dst = os.path.join(dest_dir, os.path.basename(src_host))
-        if not os.path.exists(dst):
-            os.link(src_host, dst)
-        return 1
+        pairs = [(src_host, dest_dir)]
+    else:
+        pairs = []
+        for root, _dirs, files in os.walk(src_host):
+            rel = os.path.relpath(root, src_host)
+            out = dest_dir if rel == "." else os.path.join(dest_dir, rel)
+            for fn in files:
+                pairs.append((os.path.join(root, fn), out))
+    hostile = [p for p, _ in pairs if _ext(p) in HOSTILE_EXT]
+    if not any(_ext(p) in _wanted_ext(kind) for p, _ in pairs):
+        return 0, hostile
     n = 0
-    for root, _dirs, files in os.walk(src_host):
-        rel = os.path.relpath(root, src_host)
-        out = dest_dir if rel == "." else os.path.join(dest_dir, rel)
+    for src, out in pairs:
+        if _ext(src) in HOSTILE_EXT:
+            continue
         os.makedirs(out, exist_ok=True)
-        for fn in files:
-            dst = os.path.join(out, fn)
-            if not os.path.exists(dst):
-                os.link(os.path.join(root, fn), dst)
-                n += 1
-    return n
+        dst = os.path.join(out, os.path.basename(src))
+        if not os.path.exists(dst):
+            os.link(src, dst)
+            n += 1
+    return n, hostile
+
+
+def _safe_title(title):
+    """The library folder name for a title. Must stay the ONE definition:
+    the shelf lookup, the import and the Kindle send all have to agree."""
+    return "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
 
 
 def _import_book(title, kind, tor):
+    """True on import, "rejected" if the release is junk, False if retryable."""
     dest_root = EBOOK_DIR if kind == "ebook" else AUDIOBOOK_DIR
-    safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
+    safe = _safe_title(title)
     dest = os.path.join(dest_root, safe)
     src = _host_path(tor.get("content_path") or tor.get("save_path") or "")
     if not src or not os.path.exists(src):
         log(f"import '{title}' {kind}: source missing on host ({src!r})")
         return False
     try:
-        n = _link_into(src, dest)
+        n, hostile = _link_into(src, dest, kind)
+        if hostile:
+            log(f"import '{title}' {kind}: BLOCKED executable(s) {[os.path.basename(h) for h in hostile][:3]}")
+        if not n:
+            log(f"import '{title}' {kind}: no {kind} files in the release, refusing")
+            tg(f"Blocked a fake {kind}: {title}\n"
+               f"The release had no book or audio files"
+               + (" -- just a Windows executable." if hostile else ".")
+               + "\nNothing was added to your library. Searching again.",
+               key=f"junk:{title}:{kind}")
+            return "rejected"
         log(f"imported {kind} '{title}' -> {dest} ({n} file(s))")
         return True
     except Exception as e:
@@ -822,6 +1023,55 @@ def _find_epub(root):
                 if sz > best_sz:
                     best, best_sz = p, sz
     return best
+
+
+def _has_audio(root):
+    for _dp, _dd, files in os.walk(root):
+        if any(_ext(f) in AUDIO_EXT for f in files):
+            return True
+    return False
+
+
+def shelf_copy(title, kind):
+    """An already-shelved copy of this title, or None.
+
+    One shelf, two readers: the second person to want a book should get the
+    file that is already on disk rather than a fresh torrent. Returns the
+    .epub path for an ebook (that is what the Kindle send needs) and the
+    folder for an audiobook (Audiobookshelf reads the folder).
+
+    Exact folder match first, then a normalised sweep, because the shelf folder
+    was named from whatever title the FIRST request carried -- "Armageddon
+    averted" vs "Armageddon Averted" is the same book. Matching is EQUALITY on
+    the normalised title, never a similarity ratio: "the great movies" scores
+    0.91 against "the great movies ii" and a false hit here mails out the wrong
+    book with no download to inspect. A miss only costs a re-download.
+    """
+    root = EBOOK_DIR if kind == "ebook" else AUDIOBOOK_DIR
+    exact = os.path.join(root, _safe_title(title))
+    cands = [exact] if os.path.isdir(exact) else []
+    if not cands:
+        want = _norm_title(title)
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            names = []
+        for name in names:
+            d = os.path.join(root, name)
+            if not os.path.isdir(d):
+                continue
+            if _norm_title(name) == want:
+                cands.append(d)
+    for d in cands:
+        if kind == "ebook":
+            # Only an .epub counts. A folder holding just a .pdf or .mobi is
+            # no use to the Kindle send, so let that title download properly.
+            p = _find_epub(d)
+            if p:
+                return p
+        elif _has_audio(d):
+            return d
+    return None
 
 
 def _epub_repair(path):
@@ -875,9 +1125,52 @@ def _epub_repair(path):
     return buf.getvalue()
 
 
-def send_to_kindle(title, epub_path):
-    """Email an epub to the Send-to-Kindle address. Returns (ok, message)."""
-    if not (KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
+_KINDLE_TTL = 600                      # secs a resolved address stays cached
+_kindle_cache = {}                     # user_id -> (resolved_at, address)
+
+
+def kindle_for_user(user_id):
+    """The Send-to-Kindle address for whoever made the request.
+
+    Two people share this stack and each owns a different Kindle, so the
+    device is a property of the requester, not of the box. Their address
+    lives in `user_settings` under key `kindle_email` (the same per-user
+    settings table the apps use); KINDLE_EMAIL is the fallback for rows with
+    no setting, which keeps Nate's own books working unchanged.
+
+    Cached for _KINDLE_TTL because monitor_books re-resolves on every tick.
+    A lookup failure falls back rather than raising -- a Supabase blip must
+    not strand a finished book.
+
+    NOTE: the From address stays GMAIL_USER for everyone. Amazon only accepts
+    personal documents from senders on that account's approved list, so each
+    person has to add GMAIL_USER on their own Amazon account once.
+    """
+    if not user_id:
+        return KINDLE_EMAIL
+    hit = _kindle_cache.get(user_id)
+    if hit and (time.time() - hit[0]) < _KINDLE_TTL:
+        return hit[1]
+    # No setting of their own: only the owner inherits the env address.
+    addr = KINDLE_EMAIL if (not KINDLE_OWNER_ID or user_id == KINDLE_OWNER_ID) else ""
+    try:
+        code, rows = sb("GET", f"user_settings?user_id=eq.{user_id}"
+                               "&key=eq.kindle_email&select=value")
+        if code == 200 and rows:
+            val = (rows[0].get("value") or "").strip()
+            if val:
+                addr = val
+    except Exception as e:
+        log("kindle_email lookup failed", repr(e))
+    _kindle_cache[user_id] = (time.time(), addr)
+    return addr
+
+
+def send_to_kindle(title, epub_path, to_addr=None):
+    """Email an epub to a Send-to-Kindle address. Returns (ok, message)."""
+    if to_addr is None:                     # unspecified -> the default device.
+        to_addr = KINDLE_EMAIL              # "" means "this requester has none".
+    if not (to_addr and GMAIL_USER and GMAIL_APP_PASSWORD):
         return False, "kindle not configured"
     try:
         data = _epub_repair(epub_path)
@@ -891,7 +1184,7 @@ def send_to_kindle(title, epub_path):
 
     msg = EmailMessage()
     msg["From"] = GMAIL_USER
-    msg["To"] = KINDLE_EMAIL
+    msg["To"] = to_addr
     msg["Subject"] = title                      # Amazon uses the attachment, not the body
     msg.set_content(f"{title} — sent by Cue")
     fname = os.path.basename(epub_path)
@@ -900,10 +1193,10 @@ def send_to_kindle(title, epub_path):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=120) as s:
         s.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         s.send_message(msg)
-    return True, f"emailed {fname} ({mb:.1f}MB) to kindle"
+    return True, f"emailed {fname} ({mb:.1f}MB) to {to_addr.split('@')[0]}"
 
 
-def _maybe_kindle(title, kind, meta):
+def _maybe_kindle(title, kind, meta, to_addr=None):
     """Email an imported ebook to the Kindle exactly once. Returns True if it acted.
 
     Audiobooks are served by Audiobookshelf and skipped here. The result is
@@ -912,16 +1205,24 @@ def _maybe_kindle(title, kind, meta):
     """
     if kind != "ebook" or not meta.get("imported") or meta.get("kindle"):
         return False
-    if not (KINDLE_EMAIL and GMAIL_USER and GMAIL_APP_PASSWORD):
+    if to_addr is None:
+        to_addr = KINDLE_EMAIL
+    if not (GMAIL_USER and GMAIL_APP_PASSWORD):
         return False                            # not configured -> leave unstamped, retry later
-    safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
+    if not to_addr:
+        # Requester owns no Kindle we know of. Say so on the card instead of
+        # retrying every tick or mailing it to somebody else's device.
+        meta["kindle"] = "failed: no Kindle address for requester"
+        log(f"kindle '{title}': requester has no kindle_email setting")
+        return True
+    safe = _safe_title(title)
     epub = meta.get("path") or _find_epub(os.path.join(EBOOK_DIR, safe))
     if not epub or not os.path.exists(epub):
         meta["kindle"] = "no epub in release"
         log(f"kindle '{title}': no .epub found")
         return True
     try:
-        ok, m = send_to_kindle(title, epub)
+        ok, m = send_to_kindle(title, epub, to_addr)
         meta["kindle"] = m if ok else f"failed: {m}"
         log(f"kindle '{title}': {m}")
     except Exception as e:
@@ -940,6 +1241,8 @@ def _leg_state(kind, meta, pct):
     """
     if meta.get("dead"):
         return {"state": "failed", "detail": "no live seeders left"}
+    if meta.get("rejected"):                 # junk release, binned before import
+        return {"state": "failed", "detail": "release contained no book files"}
     kindle = meta.get("kindle") or ""
     if kind == "ebook" and kindle:
         if kindle.startswith("failed") or kindle.startswith("no epub"):
@@ -948,6 +1251,8 @@ def _leg_state(kind, meta, pct):
             return {"state": "downloaded", "detail": f"on shelf; kindle: {kindle}"}
         return {"state": "delivered", "kindle": kindle}
     if meta.get("imported"):
+        if meta.get("shelf"):
+            return {"state": "downloaded", "detail": "already on shelf"}
         return {"state": "downloaded"}
     if pct is not None:
         return {"state": "downloading", "pct": pct}
@@ -957,7 +1262,7 @@ def _leg_state(kind, meta, pct):
 def monitor_books():
     """Push live progress for book rows, and import them once they finish."""
     code, rows = sb("GET", "media_requests?status=in.(added,downloading)&media_type=eq.book"
-                           "&select=id,title,status,detail,rec_id&limit=50")
+                           "&select=id,title,status,detail,rec_id,user_id&limit=50")
     if code != 200 or not rows:
         return
     try:
@@ -976,6 +1281,7 @@ def monitor_books():
         books = d.get("books") or {}
         if not books:
             continue
+        kindle_to = kindle_for_user(r.get("user_id"))   # whose Kindle this book is for
 
         pcts, done_all, changed = [], True, False
         legs = {}                                       # per-leg stamp for the Cue card
@@ -983,7 +1289,7 @@ def monitor_books():
             t = tors.get(meta.get("hash"))
             if not t:                                   # no torrent: libgen direct dl, or
                 pcts.append(100 if meta.get("imported") else 0)   # a completed torrent gone from qbit
-                if _maybe_kindle(r["title"], kind, meta):
+                if _maybe_kindle(r["title"], kind, meta, kindle_to):
                     changed = True
                 if not meta.get("imported"):
                     done_all = False
@@ -992,11 +1298,20 @@ def monitor_books():
             pct = round((t.get("progress") or 0) * 100, 1)
             pcts.append(pct)
             finished = (t.get("progress") or 0) >= 1.0
-            if finished and not meta.get("imported"):
-                if _import_book(r["title"], kind, t):
+            if finished and not meta.get("imported") and not meta.get("rejected"):
+                res = _import_book(r["title"], kind, t)
+                if res is True:
                     meta["imported"] = True
                     changed = True
-            if _maybe_kindle(r["title"], kind, meta):   # ebook -> Kindle once imported
+                elif res == "rejected":     # junk release: stop retrying, bin it,
+                    meta["rejected"] = True  # blocklist so the same file cannot return
+                    changed = True
+                    try:
+                        qbit("torrents/delete",
+                             {"hashes": meta.get("hash", ""), "deleteFiles": "true"})
+                    except Exception as e:
+                        log("could not remove rejected book torrent", repr(e))
+            if _maybe_kindle(r["title"], kind, meta, kindle_to):  # ebook -> requester's Kindle
                 changed = True
             if not finished:
                 done_all = False
@@ -1014,9 +1329,9 @@ def monitor_books():
         ebook = books.get("ebook") or {}
         if ebook.get("imported") and not ebook.get("shelved"):
             kick_cwa_ingest()
-            _safe = "".join(c for c in r["title"] if c.isalnum() or c in " -_'").strip() or "Unknown"
+            _safe = _safe_title(r["title"])
             _epub = ebook.get("path") or _find_epub(os.path.join(EBOOK_DIR, _safe))
-            if queue_for_x4(_epub, r.get("rec_id")):
+            if queue_for_x4(_epub, r.get("rec_id"), r.get("user_id")):
                 # Deliberately not "delivered" -- the book only reaches the X4
                 # when Nate next opens File Transfer, which may be days away.
                 legs["x4"] = {"state": "pending", "detail": "queued for X4"}
@@ -1095,11 +1410,54 @@ def _has_file(target, path, arr_id):
     return (st.get("episodeFileCount") or 0) > 0
 
 
+def _tv_progress(target, arr_id, season=None):
+    """(files, aired-monitored episodes, pct) for a series, or None.
+
+    A series is finished when its episodes are on disk. Queue emptiness is a
+    bad proxy: one dead torrent (or a whole wrong-show grab) pins the request
+    at 'downloading' forever while every episode already landed.
+
+    When the Cue request named a season, score only that season -- asking for
+    season 3 and being told 71% because season 1 has holes is a wrong answer.
+    """
+    if season is not None:
+        code, eps = arr(target, "GET", f"episode?seriesId={arr_id}")
+        if code != 200 or not isinstance(eps, list):
+            return None
+        now = datetime.now(timezone.utc)
+        have = total = 0
+        for e in eps:
+            if e.get("seasonNumber") != int(season) or not e.get("monitored"):
+                continue
+            air = e.get("airDateUtc")
+            if air:                                  # unaired episodes are not owed to us
+                try:
+                    if datetime.fromisoformat(air.replace("Z", "+00:00")) > now:
+                        continue
+                except Exception:
+                    pass
+            total += 1
+            if e.get("hasFile"):
+                have += 1
+        if not total:
+            return None
+        return have, total, round(have / total * 100, 1)
+    code, obj = arr(target, "GET", f"series/{arr_id}")
+    if code != 200 or not isinstance(obj, dict):
+        return None
+    st = obj.get("statistics") or {}
+    have = st.get("episodeFileCount") or 0
+    total = st.get("episodeCount") or 0
+    if not total:
+        return None
+    return have, total, round(have / total * 100, 1)
+
+
 def monitor_downloads():
     """Walk rows we've already added and push their live state back to Supabase."""
     code, rows = sb("GET",
                     "media_requests?status=in.(added,downloading)&media_type=in.(movie,tv)"
-                    "&select=id,title,media_type,status,detail,tmdb_id,year,rec_id&limit=100")
+                    "&select=id,title,media_type,status,detail,tmdb_id,year,rec_id,season&limit=100")
     if code != 200 or not rows:
         return
     qidx = {"movie": _queue_index(RADARR, "movieId"),
@@ -1128,15 +1486,33 @@ def monitor_downloads():
         rec = qidx[mt].get(arr_id)
         new_status = r["status"]
         changed = resolved
-        if rec is not None:                         # actively downloading
+        tv_pct = None
+        if mt == "tv":
+            tvp = _tv_progress(SONARR, arr_id, r.get("season"))
+            if tvp is not None:
+                have, total, tv_pct = tvp
+                if d.get("episodes") != f"{have}/{total}":
+                    d["episodes"] = f"{have}/{total}"
+                    changed = True
+        if tv_pct is not None and tv_pct >= 100:    # every aired episode on disk -> done,
+            new_status = "downloaded"               # whatever junk is still in the queue
+            if d.get("pct") != 100:
+                d["pct"] = 100
+                changed = True
+        elif rec is not None:                       # actively downloading
             pct, eta = _progress(rec)
+            if tv_pct is not None:
+                pct = tv_pct                        # series progress beats one torrent's
             new_status = "downloading"
             if d.get("pct") != pct or d.get("eta") != eta or r["status"] != "downloading":
                 d["pct"], d["eta"] = pct, eta
                 changed = True
+        elif mt == "tv":                             # nothing queued and episodes missing:
+            if tv_pct is not None and d.get("pct") != tv_pct:   # still searching, not done
+                d["pct"] = tv_pct
+                changed = True
         else:                                        # not in queue: landed, or still searching
-            path = "movie" if mt == "movie" else "series"
-            if _has_file(target, path, arr_id):
+            if _has_file(target, "movie", arr_id):
                 new_status = "downloaded"
                 d["pct"] = 100
                 changed = True
@@ -1144,6 +1520,9 @@ def monitor_downloads():
             sb("PATCH", f"media_requests?id=eq.{r['id']}",
                {"status": new_status, "detail": json.dumps(d)}, prefer="return=minimal")
             log(f"progress {mt} '{r['title']}' -> {new_status} {d.get('pct')}%")
+            if new_status == "downloaded" and r["status"] != "downloaded":
+                where = f" season {r['season']}" if r.get("season") else ""
+                tg(f"Ready to watch: {r['title']}{where}", key=f"done:{r['id']}")
         # movie/tv carry a single leg; books fan out to three (see monitor_books)
         leg = {"state": "downloaded"} if new_status == "downloaded" else (
             {"state": "downloading", "pct": d.get("pct")} if rec is not None
@@ -1151,17 +1530,90 @@ def monitor_downloads():
         stamp_fulfillment(r.get("rec_id"), {"download": leg})
 
 
+BLOCKLIST_TTL = int(os.environ.get("BLOCKLIST_TTL", str(7 * 86400)))  # secs a blocklisting lasts
+_last_prune = {}                          # app_name -> last run, so one app cannot skip the other
+
+
+def prune_blocklist(app_name, target):
+    """Expire old blocklistings so a thin catalogue cannot be permanently burned.
+
+    The reaper blocklists to stop Sonarr re-grabbing the same corpse on the very
+    next search. But "no seeders right now" is not "bad release" -- and when an
+    episode only has four candidates, blocklisting two of them makes it
+    unobtainable forever. 2026-08-08: that is exactly what happened to Untold
+    S06E04. So blocklistings expire and the release gets another chance later.
+    """
+    now = time.time()
+    if now - _last_prune.get(app_name, 0) < 3600:     # hourly is plenty
+        return
+    _last_prune[app_name] = now
+    code, b = arr(target, "GET", "blocklist?pageSize=200&sortKey=date&sortDirection=ascending")
+    if code != 200 or not isinstance(b, dict):
+        return
+    for r in b.get("records", []):
+        stamp = r.get("date") or ""
+        try:
+            age = now - datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if age >= BLOCKLIST_TTL:
+            arr(target, "DELETE", f"blocklist/{r['id']}")
+            log(f"blocklist expired {app_name}: {(r.get('sourceTitle') or '?')[:50]}")
+
+
+def _qbit_by_hash():
+    """{lowercase hash -> torrent} for everything in qBittorrent."""
+    try:
+        infos = qbit("torrents/info") or []
+    except Exception as e:
+        log("qbit info error (reap)", repr(e))
+        return {}
+    return {(t.get("hash") or "").lower(): t for t in infos if isinstance(t, dict)}
+
+
+def _is_dead(rec, qt):
+    """Is this queue row a corpse? (reason, grace) or (None, 0).
+
+    Sonarr's errorMessage is not enough on its own. The three states that
+    actually burn hours here never say 'stalled':
+      metaDL   at 0% -> magnet whose metadata never arrives
+      queuedDL at 0% -> waiting on a slot, but only dead if the swarm is empty
+      stalledDL      -> already covered by the message, kept for the no-message case
+    NordVPN gives no forwarded port, so we only ever reach peers with open
+    ports; a swarm reporting zero seeders will never start. Judge on
+    num_complete (seeders the tracker knows) rather than num_seeds
+    (seeders we happen to be connected to), which is 0 while queued.
+    """
+    msg = (rec.get("errorMessage") or "").lower()
+    if "stall" in msg or "no connection" in msg:
+        return "stalled", STALL_GRACE
+    if not qt:
+        return None, 0
+    state = qt.get("state") or ""
+    progress = qt.get("progress") or 0
+    swarm = qt.get("num_complete")
+    if swarm is None:
+        swarm = -1
+    if state in ("metaDL", "queuedDL", "stalledDL") and progress <= 0:
+        if swarm == 0:
+            return f"{state} with an empty swarm", DEAD_GRACE
+        if state == "metaDL":
+            return "metadata never arrived", META_GRACE
+    return None, 0
+
+
 def reap_stalled(app_name, target, search_cmd, id_field):
-    """Remove + blocklist + re-search downloads stuck stalled past STALL_GRACE."""
+    """Remove + blocklist + re-search downloads that are going nowhere."""
     code, q = arr(target, "GET", "queue?pageSize=100")
     if code != 200 or not isinstance(q, dict):
         return
     now = time.time()
     stalled_now = set()
+    qbt = _qbit_by_hash()
     for r in q.get("records", []):
-        msg = (r.get("errorMessage") or "").lower()
-        is_stalled = "stall" in msg or "no connection" in msg
-        if not is_stalled:
+        qt = qbt.get((r.get("downloadId") or "").lower())
+        reason, grace = _is_dead(r, qt)
+        if not reason:
             continue
         rid = r["id"]
         key = (app_name, rid)
@@ -1170,12 +1622,16 @@ def reap_stalled(app_name, target, search_cmd, id_field):
         prev = _stall.get(key)
         if not prev or prev["left"] != left:        # progress moved (or first sight) -> reset clock
             _stall[key] = {"first": now, "left": left}
-        elif now - prev["first"] >= STALL_GRACE:    # truly stuck -> reap
+        elif now - prev["first"] >= grace:          # truly stuck -> reap
             arr(target, "DELETE", f"queue/{rid}?removeFromClient=true&blocklist=true")
             wanted_id = r.get(id_field)
             if wanted_id:
                 arr(target, "POST", "command", {"name": search_cmd, f"{id_field}s": [wanted_id]})
-            log(f"reaped stalled {app_name}: {(r.get('title') or '?')[:40]} -> blocklisted + re-searched")
+            log(f"reaped {app_name} ({reason}): {(r.get('title') or '?')[:40]} -> blocklisted + re-searched")
+            title = (r.get("title") or "?")[:70]
+            tg(f"Dropped a dead download: {title}\nWhy: {reason}\n"
+               f"Blocklisted it and searched again. Ask the bot for the download "
+               f"status if it goes quiet.", key=f"reap:{title}")
             _stall.pop(key, None)
             stalled_now.discard(key)
     for key in list(_stall):                         # forget items no longer stalled
@@ -1378,6 +1834,8 @@ def tick():
     reap_stalled("radarr", RADARR, "MoviesSearch", "movieId")
     reap_stalled("sonarr", SONARR, "SeriesSearch", "seriesId")
     reap_stalled_books()
+    prune_blocklist("radarr", RADARR)
+    prune_blocklist("sonarr", SONARR)
 
 
 if __name__ == "__main__":
