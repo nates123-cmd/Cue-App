@@ -122,17 +122,22 @@ export default function App() {
 
   const onRequestFinish = (item) => setFinishTarget(item)
 
-  const onConfirmFinish = async ({ rating, note, share_to_ink }) => {
+  // Rating, review and insights all stay in Cue — the review is the item's
+  // `notes`, the insights ride along in the extension. Nothing is written to Ink.
+  const onConfirmFinish = async ({ rating, note, insights }) => {
     if (!finishTarget) return
     const target = finishTarget
-    await finishItem(target, { rating, note })
+    await finishItem(target, { rating, note, insights })
     if (openItem && openItem.id === target.id) {
-      setOpenItem((prev) => prev ? { ...prev, status: 'done', rating, notes: note } : prev)
+      setOpenItem((prev) => prev ? {
+        ...prev,
+        status: 'done',
+        rating,
+        notes: note,
+        extension: insights ? { ...(prev.extension || {}), insights } : prev.extension,
+      } : prev)
     }
     setFinishTarget(null)
-    if (share_to_ink && note) {
-      await shareReflectionToInk({ title: target.title, type: target.type, note })
-    }
   }
 
   const onDelete = async (item) => deleteItem(item.id)
@@ -172,16 +177,6 @@ export default function App() {
     })
     await reload()
     setOpenItem(null)
-  }
-
-  // Cross-suite hook: write a reflection note into Ink's `entries` table.
-  // Cue is media-only as of 2026-05-27, so primary_type is always 'media'.
-  const shareReflectionToInk = async ({ title, note }) => {
-    const raw_text = `${title} — ${note}`
-    const { error } = await supabase.from('entries').insert({
-      raw_text, primary_type: 'media', source_surface: 'cue_finish',
-    })
-    if (error) console.warn('entries insert failed', error)
   }
 
   const onFinishFromActive = async (item) => onRequestFinish(item)

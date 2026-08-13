@@ -1,19 +1,31 @@
 import { useEffect, useState } from 'react'
 import { Mono, RatingPicker, btnGhost, btnPrimary } from './primitives'
 import { ratingTone } from '../lib/meta'
+import { parseInsights } from '../lib/items'
 
-// Small modal sheet to capture rating (1..5) + optional note before
-// marking an item done. Restaurants get a slightly different framing.
+const sheetFieldStyle = {
+  appearance: 'none', outline: 0, resize: 'vertical',
+  padding: '10px 12px', borderRadius: 6,
+  background: 'var(--paper-soft)',
+  border: '1px solid var(--hairline-strong)',
+  color: 'var(--text)',
+  fontFamily: 'var(--body)', fontSize: 14, lineHeight: 1.5,
+  minHeight: 64, maxHeight: 240,
+}
+
+// Small modal sheet to capture rating (1..5), a short review and any insights
+// before marking an item done. The review lives in Cue (recommendations.notes)
+// and the insights in extension.insights — nothing is cross-posted to Ink.
 export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
   const [rating, setRating] = useState(null)
   const [note, setNote] = useState('')
-  const [shareToInk, setShareToInk] = useState(true)
+  const [insights, setInsights] = useState('')
 
   useEffect(() => {
     if (open) {
       setRating(item?.rating ?? null)
       setNote(item?.notes ?? '')
-      setShareToInk(true)
+      setInsights((item?.extension?.insights || []).join('\n'))
     }
   }, [open, item])
 
@@ -58,38 +70,26 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <Mono size={9} dim>Notes (optional)</Mono>
+          <Mono size={9} dim>Review (optional)</Mono>
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="a sentence on what stayed with you"
             rows={3}
-            style={{
-              appearance: 'none', outline: 0, resize: 'vertical',
-              padding: '10px 12px', borderRadius: 6,
-              background: 'var(--paper-soft)',
-              border: '1px solid var(--hairline-strong)',
-              color: 'var(--text)',
-              fontFamily: 'var(--body)', fontSize: 14, lineHeight: 1.5,
-              minHeight: 64, maxHeight: 240,
-            }}
+            style={sheetFieldStyle}
           />
         </div>
 
-        {note.trim() && (
-          <label style={{
-            display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-soft)',
-          }}>
-            <input
-              type="checkbox"
-              checked={shareToInk}
-              onChange={(e) => setShareToInk(e.target.checked)}
-              style={{ accentColor: 'var(--signal)', cursor: 'pointer' }}
-            />
-            Also save this as a reflection in Ink
-          </label>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Mono size={9} dim>Insights — one per line (optional)</Mono>
+          <textarea
+            value={insights}
+            onChange={(e) => setInsights(e.target.value)}
+            placeholder={'the idea worth keeping\nanother one'}
+            rows={3}
+            style={sheetFieldStyle}
+          />
+        </div>
 
         <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
           <button onClick={onClose} style={{ ...btnGhost, flex: 1 }}>Cancel</button>
@@ -97,7 +97,7 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
             onClick={() => onConfirm({
               rating,
               note: note.trim() || null,
-              share_to_ink: shareToInk && !!note.trim(),
+              insights: parseInsights(insights),
             })}
             style={{ ...btnPrimary, flex: 1.4 }}
           >Confirm</button>

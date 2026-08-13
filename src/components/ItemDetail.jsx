@@ -12,7 +12,91 @@ import { EditableField } from './EditableField'
 import { enrich, pickSeason, seasonsFor } from '../lib/enrichment'
 import { SeasonPicker } from '../pages/Capture'
 import { fulfillmentBadges } from '../lib/fulfillment'
-import { pushTarget } from '../lib/items'
+import { insightsOf, pushTarget } from '../lib/items'
+
+// The insights an item left you with, kept in Cue (extension.insights) rather
+// than pushed anywhere else. Rows are click-to-edit; clearing a row's text
+// deletes it, which is the only delete affordance the list needs.
+const InsightList = ({ item, readOnly, onPatch }) => {
+  const list = insightsOf(item)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+
+  const write = (next) => onPatch && onPatch(item, {
+    extension: { ...(item.extension || {}), insights: next },
+  })
+
+  const commitNew = () => {
+    const v = draft.trim()
+    if (v) write([...list, v])
+    setDraft('')
+    setAdding(false)
+  }
+
+  return (
+    <div>
+      <Mono size={9} dim style={{ display: 'block', marginBottom: 6 }}>Insights</Mono>
+      {list.length === 0 && !adding && readOnly && <Mono size={9} dim>(none)</Mono>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {list.map((text, i) => (
+          <div key={i} style={{ display: 'flex', gap: 9, alignItems: 'baseline' }}>
+            <Mono size={9} style={{ color: 'var(--signal)', flexShrink: 0 }}>
+              {String(i + 1).padStart(2, '0')}
+            </Mono>
+            {readOnly ? (
+              <div style={{
+                fontFamily: 'var(--body)', fontSize: 13.5, lineHeight: 1.45, color: 'var(--text)',
+              }}>{text}</div>
+            ) : (
+              <div style={{ flex: 1 }}>
+                <EditableField
+                  value={text}
+                  onSave={(v) => {
+                    const next = v ? list.map((x, j) => (j === i ? v : x)) : list.filter((_, j) => j !== i)
+                    write(next)
+                  }}
+                  placeholder="(cleared — will be removed)"
+                  multiline
+                  displayStyle={{
+                    fontFamily: 'var(--body)', fontSize: 13.5, lineHeight: 1.45, color: 'var(--text)',
+                  }}
+                  editStyle={{
+                    fontFamily: 'var(--body)', fontSize: 13.5, lineHeight: 1.45, color: 'var(--text)',
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {!readOnly && (adding ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitNew}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitNew() }
+            if (e.key === 'Escape') { setDraft(''); setAdding(false) }
+          }}
+          placeholder="the idea worth keeping"
+          style={{
+            width: '100%', marginTop: list.length ? 8 : 0,
+            appearance: 'none', outline: 0,
+            padding: '6px 8px', borderRadius: 3,
+            background: 'var(--paper-soft)', border: '1px solid var(--signal)',
+            color: 'var(--text)', fontFamily: 'var(--body)', fontSize: 13.5,
+          }}
+        />
+      ) : (
+        <button
+          onClick={() => setAdding(true)}
+          style={{ ...btnGhost, marginTop: list.length ? 8 : 0, padding: '4px 9px', fontSize: 9 }}
+        >+ Add insight</button>
+      ))}
+    </div>
+  )
+}
 
 // Small uppercased mono chip rendered just above the synopsis. Picks up the
 // suite signal color so it reads like a press-tag editorial label.
@@ -496,7 +580,7 @@ export const ItemDetail = ({
 
           <TogetherRow item={item} partner={partner} onToggle={readOnly ? undefined : onToggleWith} />
 
-          {/* Rating + notes */}
+          {/* Review: rating + your take + the insights it left you with */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <Mono size={9} dim>Rating</Mono>
@@ -511,7 +595,7 @@ export const ItemDetail = ({
               </span>
             </div>
             <div>
-              <Mono size={9} dim style={{ display: 'block', marginBottom: 6 }}>Notes</Mono>
+              <Mono size={9} dim style={{ display: 'block', marginBottom: 6 }}>Review</Mono>
               {readOnly ? (
                 item.notes ? (
                   <div style={{
@@ -540,6 +624,7 @@ export const ItemDetail = ({
                 />
               )}
             </div>
+            <InsightList item={item} readOnly={readOnly} onPatch={onPatch} />
           </div>
 
 
