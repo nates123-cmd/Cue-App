@@ -45,6 +45,27 @@ export function toSeason(v) {
   return Number.isFinite(n) ? n : null
 }
 
+// Insights (the takeaways worth keeping from a finished item) live in Cue, in
+// `recommendations.extension.insights`. They're authored as free text — one per
+// line — so this is the single place that turns that text into the stored array.
+// Blank lines and leading bullet characters are dropped so pasted notes land
+// clean.
+export function parseInsights(text) {
+  if (Array.isArray(text)) return text.map((s) => String(s).trim()).filter(Boolean)
+  return String(text || '')
+    .split('\n')
+    .map((l) => l.replace(/^\s*[-–—•*]\s*/, '').trim())
+    .filter(Boolean)
+}
+
+// Read side of the same field. Legacy rows have no `insights` key at all, and
+// nothing stops a hand-edited row from holding a string, so both collapse to [].
+export function insightsOf(item) {
+  const v = item?.extension?.insights
+  if (Array.isArray(v)) return v.filter((s) => typeof s === 'string' && s.trim())
+  return []
+}
+
 export function pushTarget(type) {
   if (type === 'movie') return { app: 'Radarr', media_type: 'movie' }
   if (type === 'tv') return { app: 'Sonarr', media_type: 'tv' }
@@ -264,10 +285,15 @@ export function useItems() {
 
   // Mark done = update recommendations (rating/notes/finished_at) + insert a
   // media_entries row so Ink's log stays coherent.
-  const finishItem = useCallback(async (item, { rating = null, note = null } = {}) => {
+  const finishItem = useCallback(async (item, { rating = null, note = null, insights = null } = {}) => {
     const finished_at = new Date().toISOString()
+    // Insights are merged into the existing extension rather than replacing it —
+    // the extension also carries type-specific state (page counts, tmdb ids).
+    const nextExt = insights
+      ? { ...(item.extension || {}), insights }
+      : (item.extension || {})
     setItems((prev) => prev.map((i) => i.id === item.id
-      ? { ...i, status: 'done', finished_at, rating: rating ?? i.rating, notes: note ?? i.notes }
+      ? { ...i, status: 'done', finished_at, rating: rating ?? i.rating, notes: note ?? i.notes, extension: nextExt }
       : i))
     if (item._source === 'rec') {
       const upd = {
@@ -276,6 +302,7 @@ export function useItems() {
         consumed_at: finished_at,
         rating: rating ?? item.rating ?? null,
         notes: note ?? item.notes ?? null,
+        extension: nextExt,
       }
       const recRes = await supabase.from('recommendations').update(upd).eq('id', item.id)
       if (recRes.error) { await reload(); throw recRes.error }
