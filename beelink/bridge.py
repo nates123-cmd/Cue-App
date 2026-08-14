@@ -647,12 +647,25 @@ class _MagnetRedirect(Exception):
 
 
 class _CatchMagnet(urllib.request.HTTPRedirectHandler):
-    """Prowlarr answers /download with a 302 to magnet: for magnet-only indexers,
-    which urllib cannot follow (unknown scheme). Capture it instead."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    """Prowlarr answers /download with a 30x to magnet: for magnet-only indexers.
+
+    LANDMINE: hooking redirect_request here does NOT work. urllib's
+    HTTPRedirectHandler.http_error_30x validates the redirect target scheme and
+    raises HTTPError for anything that is not http/https/ftp *before* it ever
+    calls redirect_request -- so a magnet: target escapes as
+    "HTTP Error 301: Moved Permanently - Redirection to url ..." and
+    redirect_request is never reached. Hook the error methods instead.
+
+    CPython itself aliases 301/303/307/308 to http_error_302, so delegating the
+    non-magnet path to super().http_error_302 preserves stock behaviour.
+    """
+    def http_error_302(self, req, fp, code, msg, headers):
+        newurl = headers.get("location") or headers.get("uri") or ""
         if newurl.startswith("magnet:"):
             raise _MagnetRedirect(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
 def _release_payload(rel):
