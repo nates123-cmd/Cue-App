@@ -832,7 +832,7 @@ def libgen_ebook(title, author):
         try:
             html = _lg_get(f"{base}/index.php?req={query}", timeout=30).decode("utf-8", "ignore")
         except Exception as e:
-            log(f"libgen search {base} failed: {str(e)[:60]}")
+            log(f"libgen search {base} failed: {str(e)[:200]}")
             continue
         pick = _lg_pick(_lg_rows(html), title)
         if not pick:
@@ -840,7 +840,7 @@ def libgen_ebook(title, author):
         try:
             data = _lg_download(pick["md5"], base)
         except Exception as e:
-            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:60]}")
+            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:200]}")
             continue
         safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
         dest = os.path.join(EBOOK_DIR, safe)
@@ -891,8 +891,8 @@ def add_book(req):
         try:
             h = qbit_add(rel)
         except Exception as e:
-            tried.append(f"{kind} grab failed: {str(e)[:60]}")
-            missing[kind] = f"grab failed: {str(e)[:60]}"
+            tried.append(f"{kind} grab failed: {str(e)[:200]}")
+            missing[kind] = f"grab failed: {str(e)[:200]}"
             continue
         grabbed[kind] = {"hash": h, "release": (rel.get("title") or "")[:120],
                          "seeders": rel.get("seeders")}
@@ -909,8 +909,8 @@ def add_book(req):
                 tried.append("no ebook on libgen")
                 missing["ebook"] = "not on torrents or Libgen"
         except Exception as e:
-            tried.append(f"libgen failed: {str(e)[:60]}")
-            missing["ebook"] = f"libgen failed: {str(e)[:60]}"
+            tried.append(f"libgen failed: {str(e)[:200]}")
+            missing["ebook"] = f"libgen failed: {str(e)[:200]}"
 
     if not grabbed:
         raise RuntimeError("no book found (" + ", ".join(tried) + ")")
@@ -1359,7 +1359,17 @@ def monitor_books():
         if etas:
             eta = f"{max(etas) // 60}m"
 
-        new_status = "downloaded" if (done_all and all(m.get("imported") for m in books.values()))                      else "downloading"
+        # A book request has TWO legs but only one status column. Finishing a
+        # half-failed request as "downloaded" strands it forever: the daemon
+        # never revisits a finished row, and Cue's dedupe (App.jsx) only lets a
+        # `failed` row be re-pushed -- so the only recovery was hand-deleting the
+        # row from the DB. Let the terminal state carry the missing leg instead.
+        # Per-leg detail still rides in `legs`/stamp_fulfillment, so the Cue card
+        # keeps showing which half actually landed.
+        if done_all and all(m.get("imported") for m in books.values()):
+            new_status = "failed" if (d.get("missing") or {}) else "downloaded"
+        else:
+            new_status = "downloading"
         if d.get("pct") != pct or d.get("eta") != eta or r["status"] != new_status or changed:
             d["pct"], d["eta"] = pct, eta
             sb("PATCH", f"media_requests?id=eq.{r['id']}",
@@ -1773,7 +1783,7 @@ def reap_stalled_books():
                 nh = qbit_add(rel)
             except Exception as e:
                 meta["dead"] = True
-                log("book " + repr(title) + ": re-grab failed: " + str(e)[:60])
+                log("book " + repr(title) + ": re-grab failed: " + str(e)[:200])
                 continue
             meta["hash"] = nh
             meta["release"] = (rel.get("title") or "")[:120]
