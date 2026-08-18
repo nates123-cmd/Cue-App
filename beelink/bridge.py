@@ -647,12 +647,25 @@ class _MagnetRedirect(Exception):
 
 
 class _CatchMagnet(urllib.request.HTTPRedirectHandler):
-    """Prowlarr answers /download with a 302 to magnet: for magnet-only indexers,
-    which urllib cannot follow (unknown scheme). Capture it instead."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    """Prowlarr answers /download with a 30x to magnet: for magnet-only indexers.
+
+    LANDMINE: hooking redirect_request here does NOT work. urllib's
+    HTTPRedirectHandler.http_error_30x validates the redirect target scheme and
+    raises HTTPError for anything that is not http/https/ftp *before* it ever
+    calls redirect_request -- so a magnet: target escapes as
+    "HTTP Error 301: Moved Permanently - Redirection to url ..." and
+    redirect_request is never reached. Hook the error methods instead.
+
+    CPython itself aliases 301/303/307/308 to http_error_302, so delegating the
+    non-magnet path to super().http_error_302 preserves stock behaviour.
+    """
+    def http_error_302(self, req, fp, code, msg, headers):
+        newurl = headers.get("location") or headers.get("uri") or ""
         if newurl.startswith("magnet:"):
             raise _MagnetRedirect(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
 def _release_payload(rel):
@@ -819,7 +832,7 @@ def libgen_ebook(title, author):
         try:
             html = _lg_get(f"{base}/index.php?req={query}", timeout=30).decode("utf-8", "ignore")
         except Exception as e:
-            log(f"libgen search {base} failed: {str(e)[:60]}")
+            log(f"libgen search {base} failed: {str(e)[:200]}")
             continue
         pick = _lg_pick(_lg_rows(html), title)
         if not pick:
@@ -827,7 +840,7 @@ def libgen_ebook(title, author):
         try:
             data = _lg_download(pick["md5"], base)
         except Exception as e:
-            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:60]}")
+            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:200]}")
             continue
         safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
         dest = os.path.join(EBOOK_DIR, safe)
@@ -878,8 +891,8 @@ def add_book(req):
         try:
             h = qbit_add(rel)
         except Exception as e:
-            tried.append(f"{kind} grab failed: {str(e)[:60]}")
-            missing[kind] = f"grab failed: {str(e)[:60]}"
+            tried.append(f"{kind} grab failed: {str(e)[:200]}")
+            missing[kind] = f"grab failed: {str(e)[:200]}"
             continue
         grabbed[kind] = {"hash": h, "release": (rel.get("title") or "")[:120],
                          "seeders": rel.get("seeders")}
@@ -896,8 +909,8 @@ def add_book(req):
                 tried.append("no ebook on libgen")
                 missing["ebook"] = "not on torrents or Libgen"
         except Exception as e:
-            tried.append(f"libgen failed: {str(e)[:60]}")
-            missing["ebook"] = f"libgen failed: {str(e)[:60]}"
+            tried.append(f"libgen failed: {str(e)[:200]}")
+            missing["ebook"] = f"libgen failed: {str(e)[:200]}"
 
     if not grabbed:
         raise RuntimeError("no book found (" + ", ".join(tried) + ")")
@@ -974,7 +987,7 @@ def _safe_title(title):
     return "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
 
 
-def _import_book(title, kind, tor):
+def _import_book(title, kind, tor, meta=None):
     """True on import, "rejected" if the release is junk, False if retryable."""
     dest_root = EBOOK_DIR if kind == "ebook" else AUDIOBOOK_DIR
     safe = _safe_title(title)
@@ -996,6 +1009,16 @@ def _import_book(title, kind, tor):
                key=f"junk:{title}:{kind}")
             return "rejected"
         log(f"imported {kind} '{title}' -> {dest} ({n} file(s))")
+        if kind == "audiobook":
+            nav = _audiobook_nav(dest)
+            if nav:
+                if meta is not None:
+                    meta["nav"] = nav
+                if nav["nav"] == "single":
+                    log(f"audiobook '{title}': ONE file, no chapter markers -- "
+                        f"no in-app navigation (Place's transcript map still seeks)")
+                elif nav["nav"] == "chapters":
+                    log(f"audiobook '{title}': {nav.get('chapters')} chapter markers")
         return True
     except Exception as e:
         log(f"import '{title}' {kind} FAILED: {e!r}")
@@ -1030,6 +1053,53 @@ def _has_audio(root):
         if any(_ext(f) in AUDIO_EXT for f in files):
             return True
     return False
+
+
+# The only bad case is ONE audio file with no chapter markers: a 39 h scrub bar
+# with nothing to jump to. Multi-file releases are navigable by track and need
+# no probe at all. Measured on the real shelf: format does NOT predict this --
+# The Fort Bragg Cartel is an .m4b with zero chapters, while Homo Deus is 61
+# .mp3s and navigates fine. Only the file/chapter count tells you, and neither
+# is published by any indexer at search time (Prowlarr reports files=None, and
+# AudiobookBay sends a constant placeholder size), so this has to happen here.
+#
+# Advisory only. It runs AFTER the files are already in the library and must
+# never delay or fail an import, so every failure path returns "unknown" and the
+# caller carries on regardless.
+NAV_PROBE_TIMEOUT = 15          # seconds; give up quick rather than hold a book
+
+
+def _audiobook_nav(dest):
+    """{'nav': tracks|chapters|single|unknown, ...} or None if there is no audio."""
+    try:
+        auds = []
+        for dp, _dd, files in os.walk(dest):
+            auds += [os.path.join(dp, f) for f in files if _ext(f) in AUDIO_EXT]
+        if not auds:
+            return None
+        if len(auds) > 1:
+            # More than one file: the player has track boundaries to seek by.
+            return {"nav": "tracks", "files": len(auds)}
+
+        # Exactly one file -- the only case that can be a blob. Ask ffprobe for
+        # chapter markers. The box has no ffmpeg of its own; it lives in the
+        # Jellyfin container, which mounts /srv/media/data/media at /media.
+        import subprocess
+        rel = auds[0].replace("/srv/media/data/media/", "", 1)
+        out = subprocess.run(
+            ["docker", "exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffprobe",
+             "-v", "error", "-print_format", "json", "-show_chapters",
+             "/media/" + rel],
+            capture_output=True, text=True, timeout=NAV_PROBE_TIMEOUT)
+        if out.returncode != 0:
+            return {"nav": "unknown", "files": 1}
+        chapters = len(json.loads(out.stdout or "{}").get("chapters") or [])
+        return {"nav": "chapters" if chapters > 1 else "single",
+                "files": 1, "chapters": chapters}
+    except Exception:
+        # Timeout, docker down, unreadable file -- all the same answer: we do not
+        # know, and it is not worth holding the import to find out.
+        return {"nav": "unknown", "files": None}
 
 
 def shelf_copy(title, kind):
@@ -1299,7 +1369,7 @@ def monitor_books():
             pcts.append(pct)
             finished = (t.get("progress") or 0) >= 1.0
             if finished and not meta.get("imported") and not meta.get("rejected"):
-                res = _import_book(r["title"], kind, t)
+                res = _import_book(r["title"], kind, t, meta)
                 if res is True:
                     meta["imported"] = True
                     changed = True
@@ -1346,7 +1416,17 @@ def monitor_books():
         if etas:
             eta = f"{max(etas) // 60}m"
 
-        new_status = "downloaded" if (done_all and all(m.get("imported") for m in books.values()))                      else "downloading"
+        # A book request has TWO legs but only one status column. Finishing a
+        # half-failed request as "downloaded" strands it forever: the daemon
+        # never revisits a finished row, and Cue's dedupe (App.jsx) only lets a
+        # `failed` row be re-pushed -- so the only recovery was hand-deleting the
+        # row from the DB. Let the terminal state carry the missing leg instead.
+        # Per-leg detail still rides in `legs`/stamp_fulfillment, so the Cue card
+        # keeps showing which half actually landed.
+        if done_all and all(m.get("imported") for m in books.values()):
+            new_status = "failed" if (d.get("missing") or {}) else "downloaded"
+        else:
+            new_status = "downloading"
         if d.get("pct") != pct or d.get("eta") != eta or r["status"] != new_status or changed:
             d["pct"], d["eta"] = pct, eta
             sb("PATCH", f"media_requests?id=eq.{r['id']}",
@@ -1760,7 +1840,7 @@ def reap_stalled_books():
                 nh = qbit_add(rel)
             except Exception as e:
                 meta["dead"] = True
-                log("book " + repr(title) + ": re-grab failed: " + str(e)[:60])
+                log("book " + repr(title) + ": re-grab failed: " + str(e)[:200])
                 continue
             meta["hash"] = nh
             meta["release"] = (rel.get("title") or "")[:120]
