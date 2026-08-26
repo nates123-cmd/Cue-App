@@ -11,7 +11,7 @@ import { useEdition } from '../lib/EditionContext'
 import {
   generateRecs, whyThis, loadBatch, saveBatch, addDismissal,
 } from '../lib/recs'
-import { feedRows, hasTmdbKey, clearDiscoverCache } from '../lib/discover'
+import { feedRows, hasTmdbKey, clearDiscoverCache, youtubeSearchUrl } from '../lib/discover'
 
 const SOURCE_LABEL = { tmdb: 'TMDB', tastedive: 'TasteDive', backlog: 'Backlog', claude: 'Cue' }
 
@@ -93,12 +93,29 @@ const SuggestionCard = ({ sug, why, whyBusy, onWhy, onConfirm, onDismiss, confir
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 6 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 6, flexWrap: 'wrap' }}>
           <button onClick={onConfirm} disabled={confirmed} style={{ ...btnPrimary, padding: '6px 12px', fontSize: 9 }}>
             {confirmed ? 'Queued ✓' : '+ Queue'}
           </button>
           {!confirmed && (
             <button onClick={onDismiss} style={{ ...btnGhost, padding: '6px 10px', fontSize: 9 }}>Not for me</button>
+          )}
+          {/* Search rather than a resolved trailer: these picks come from
+              TasteDive and Claude as often as TMDB, so most carry no tmdb_id to
+              look one up with. The sheet in the Feed does resolve the real one. */}
+          {(sug.type === 'movie' || sug.type === 'tv') && (
+            <a
+              href={youtubeSearchUrl(sug.title, ext.release_year || ext.first_air_year)}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                ...btnGhost, padding: '6px 10px', fontSize: 9, textDecoration: 'none',
+                display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--text-soft)',
+              }}
+            >
+              <span style={{ color: 'var(--signal)', lineHeight: 1 }}>▶</span>
+              Trailer
+            </a>
           )}
         </div>
       </div>

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Cover, Mono, btnGhost, btnPrimary } from './primitives'
 import { TypeIcon } from './TypeIcon'
 import { metaFor } from '../lib/meta'
-import { fetchWatchProviders } from '../lib/discover'
+import { fetchWatchProviders, fetchTrailerUrl, youtubeSearchUrl } from '../lib/discover'
 
 // The sheet behind a tapped Discover tile: what it is, where it streams, and
 // the two things Cue can do with it — put it in the queue, or send it to the
@@ -25,6 +25,7 @@ function asCoverItem(entry) {
 
 export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, onDownload }) => {
   const [providers, setProviders] = useState(null) // null = still looking
+  const [trailer, setTrailer] = useState(null)     // TMDB's best YouTube trailer
   const [queueState, setQueueState] = useState('idle') // idle | busy | done
   const [dlState, setDlState] = useState('idle')       // idle | busy | done | duplicate | error
   const [error, setError] = useState(null)
@@ -38,6 +39,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
 
   useEffect(() => {
     setProviders(null)
+    setTrailer(null)
     setQueueState('idle')
     setDlState('idle')
     setError(null)
@@ -46,6 +48,9 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
     fetchWatchProviders(entry.facts?.tmdb_id, entry.type)
       .then((p) => { if (live) setProviders(p) })
       .catch(() => { if (live) setProviders([]) })
+    fetchTrailerUrl(entry.facts?.tmdb_id, entry.type)
+      .then((u) => { if (live) setTrailer(u) })
+      .catch(() => { if (live) setTrailer(null) })
     return () => { live = false }
   }, [entry])
 
@@ -81,6 +86,11 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
       setError(e?.message || 'Could not send this to the download stack.')
     }
   }
+
+  // Linked immediately rather than waiting on TMDB: the search URL is always
+  // watchable, and the link quietly upgrades to the exact trailer once the
+  // /videos call lands. A title TMDB has no trailer for keeps the search.
+  const trailerHref = trailer || youtubeSearchUrl(entry.title, year)
 
   const dlLabel = {
     idle: '↓ Download',
@@ -138,6 +148,20 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
             {inLibrary && (
               <Mono size={9} style={{ color: 'var(--signal)' }}>Already in your library</Mono>
             )}
+            <a
+              href={trailerHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                ...btnGhost, alignSelf: 'flex-start', marginTop: 1,
+                padding: '4px 9px', fontSize: 8.5, textDecoration: 'none',
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                color: 'var(--text-soft)',
+              }}
+            >
+              <span style={{ color: 'var(--signal)', fontSize: 9, lineHeight: 1 }}>▶</span>
+              Trailer
+            </a>
           </div>
         </div>
 
