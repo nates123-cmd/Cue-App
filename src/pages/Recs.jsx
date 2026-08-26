@@ -247,7 +247,20 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
   const seedChip = activeSeed?.kind === 'item' ? (activeSeed.item?.title) : (batch?.seed?.itemTitle)
 
   // ── discover feed ──────────────────────────────────────────
-  const rows = useMemo(() => feedRows(), [])
+  // The feed's personal rows ("Because you liked X", "More thriller", the
+  // streaming-now queue) are derived from the library, so the row list has to
+  // rebuild when the library changes — but `items` is a fresh array after every
+  // save, and rebuilding on identity alone would re-key nine rows and refetch
+  // them on each edit. Key on the fields those rows actually read instead.
+  const tasteSig = useMemo(
+    () => items
+      .filter((i) => i.type === 'movie' || i.type === 'tv')
+      .map((i) => `${i.id}:${i.status}:${i.rating || 0}:${i.extension?.tmdb_id ?? ''}`)
+      .join('|'),
+    [items],
+  )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const rows = useMemo(() => feedRows(items), [tasteSig])
 
   // Titles already in the library, so the feed can mark them instead of
   // pretending they're new. Matched on type+title because a discover entry has
