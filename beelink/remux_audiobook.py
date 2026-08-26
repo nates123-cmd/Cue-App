@@ -30,6 +30,7 @@ own mount is read-only, so we run a throwaway container with a rw bind.
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -296,6 +297,16 @@ def main():
     os.replace(stage, os.path.join(src, a.title + ".mp3"))
     print("applied -> %s/%s.mp3" % (src, a.title))
     print("folder now:", os.listdir(src))
+
+    # The stripped copies are a full second copy of the book (1.1 GB for The
+    # Odyssey) and are worthless once the concat has been applied and verified.
+    # Left behind they accumulate one book at a time, inside the media library,
+    # where nothing else would ever account for them.
+    clean = os.path.join(work, "clean")
+    if os.path.isdir(clean):
+        freed = sum(os.path.getsize(os.path.join(clean, f)) for f in os.listdir(clean))
+        shutil.rmtree(clean)
+        print("cleaned staging: freed %.0f MB" % (freed / 1e6))
 
 
 if __name__ == "__main__":
