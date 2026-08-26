@@ -340,6 +340,15 @@ export default function App() {
 
         <BottomNav page={page} onChange={setPage} activeCount={activeCount} />
 
+        {/* Portal host for overlays raised from inside a page. The page wrapper
+            above sets z-index 2, which makes it a stacking context — a fixed
+            sheet rendered inside a page is stuck under BottomNav (z 40) and the
+            Capture FAB (z 35) no matter how high its own z-index goes. This div
+            is unpositioned, so its fixed children land in the root stacking
+            context, and it sits inside the themed div so the edition's CSS vars
+            still inherit (document.body only carries the dark fallbacks). */}
+        <div id="cue-overlay-root" />
+
         {!captureOpen && !openItem && !finishTarget && (
           <button onClick={() => setCaptureOpen(true)} style={{
             position: 'fixed', bottom: 'calc(92px + env(safe-area-inset-bottom, 0px))', right: 16, zIndex: 35,

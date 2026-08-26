@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Cover, Mono, btnGhost, btnPrimary } from './primitives'
 import { TypeIcon } from './TypeIcon'
 import { metaFor } from '../lib/meta'
@@ -27,6 +28,13 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
   const [queueState, setQueueState] = useState('idle') // idle | busy | done
   const [dlState, setDlState] = useState('idle')       // idle | busy | done | duplicate | error
   const [error, setError] = useState(null)
+  // The sheet renders from inside the Recs page, which App wraps in a z-index 2
+  // stacking context — so it has to be portalled out to clear the bottom nav.
+  const [host, setHost] = useState(null)
+
+  useEffect(() => {
+    setHost(document.getElementById('cue-overlay-root') || document.body)
+  }, [])
 
   useEffect(() => {
     setProviders(null)
@@ -41,7 +49,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
     return () => { live = false }
   }, [entry])
 
-  if (!entry) return null
+  if (!entry || !host) return null
 
   const f = entry.facts || {}
   const year = f.release_year || f.first_air_year || null
@@ -82,7 +90,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
     error: 'Retry download',
   }[dlState]
 
-  return (
+  return createPortal(
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.55)' }} />
       <div style={{
@@ -196,6 +204,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
           )}
         </div>
       </div>
-    </>
+    </>,
+    host,
   )
 }
