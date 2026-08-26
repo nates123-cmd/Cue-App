@@ -169,6 +169,45 @@ def verify(host_path, want_chapters, want_seconds):
     return len(bad)
 
 
+def _chapter_names(files):
+    """Chapter titles from the track filenames, falling back to Part NN.
+
+    Rips usually name tracks informatively ("The Odyssey - Book 11.mp3"); the
+    part that differs between them is the useful bit, so the shared prefix and
+    suffix are trimmed. Anything that collapses to nothing or to duplicates is
+    not carrying information, so numbering is used instead.
+    """
+    stems = [os.path.splitext(f)[0] for f in files]
+    if len(stems) < 2:
+        return ["Part 01"]
+    pre = os.path.commonprefix(stems)
+    rev = os.path.commonprefix([x[::-1] for x in stems])[::-1]
+    out = []
+    for x in stems:
+        core = x[len(pre):len(x) - len(rev)] if rev and len(pre) + len(rev) < len(x) else x[len(pre):]
+        out.append(core.strip(" -_.") or "")
+    if any(not c for c in out) or len(set(out)) != len(out):
+        return ["Part %02d" % i for i in range(1, len(files) + 1)]
+    # a bare number reads better with the trimmed prefix put back
+    label = pre.strip(" -_.").split("/")[-1]
+    if label and all(c.replace(".", "").isdigit() for c in out):
+        return ["%s %s" % (label, c) for c in out]
+    return out
+
+
+def natural_key(name):
+    """Sort key that orders Book 2 before Book 10.
+
+    Plain sorted() is lexicographic, so an unpadded track set concatenates as
+    1, 10, 11, ... 19, 2, 20 -- which silently produces a complete audiobook
+    with its chapters in the wrong order. It bit The Odyssey (24 tracks named
+    "The Odyssey - Book N.mp3"); zero-padded rips like "... 01.mp3" happen to
+    be safe, which is exactly what makes this easy to miss.
+    """
+    return [int(t) if t.isdigit() else t.lower()
+            for t in re.split(r"(\d+)", name)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("folder", help="book folder under the audiobooks dir")
@@ -184,8 +223,12 @@ def main():
     os.makedirs(work, exist_ok=True)
     stage = os.path.join(work, a.title + ".mp3")
 
-    audio = sorted(f for f in os.listdir(src)
-                   if f.lower().endswith((".mp3", ".m4a", ".m4b")))
+    audio = sorted((f for f in os.listdir(src)
+                    if f.lower().endswith((".mp3", ".m4a", ".m4b"))),
+                   key=natural_key)
+    if audio != sorted(audio):
+        print("  NOTE: natural order differs from lexicographic -- "
+              "concatenating as %s ... %s" % (audio[0], audio[-1]))
     print("source: %s\n  %d audio file(s)" % (src, len(audio)))
     baseline = sum(len(decode_errors(os.path.join(src, f))) for f in audio)
 
@@ -218,9 +261,10 @@ def main():
         total = sum(durs)
         print("  stripped %d tracks, %.3f h" % (len(parts), total / 3600))
 
+        names = _chapter_names(audio)
         chapters, t = [], 0.0
         for i, d in enumerate(durs, 1):
-            chapters.append(("Part %02d" % i, t))
+            chapters.append((names[i - 1], t))
             t += d
         n_ch = write_meta(os.path.join(work, "meta.txt"), a.title, a.author,
                           chapters, total)
