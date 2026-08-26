@@ -569,14 +569,274 @@ def _pick_release(results, want_title, formats, require_format):
     return scored[0][2]
 
 
-def _search_books(title, author, cats):
-    q = f"{title} {author}".strip() if author else title
+def _prowlarr_search(q, cats):
+    """One query. Never raises: a search is now several queries, and one slow
+    indexer timing out must not take the whole leg down with it."""
     qs = "search?query=" + urllib.parse.quote(q) + "".join(f"&categories={c}" for c in cats) + "&type=search"
-    code, res = prowlarr("GET", qs)
+    try:
+        code, res = prowlarr("GET", qs)
+    except Exception as e:
+        log(f"prowlarr search failed for {q!r}: {type(e).__name__}: {str(e)[:120]}")
+        return []
     if code != 200 or not isinstance(res, list):
         log(f"prowlarr search {code} for {q!r}")
         return []
     return res
+
+
+def _rel_key(r):
+    return (r.get("infoHash") or r.get("guid") or r.get("downloadUrl")
+            or r.get("title") or "")
+
+
+def _search_books(title, author, cats, kind="ebook"):
+    """Every query worth asking for this book, de-duplicated.
+
+    A single "<title> <author>" query is what we used to send, and it cannot
+    find an audiobook that ships inside an omnibus: "Ursula K. Le Guin Audiobook
+    Collection" contains the author and not the title, so the indexer returns
+    nothing and the leg reports "no torrent found" -- which is what happened to
+    The Lathe of Heaven twice, while a 98-seeder pack holding three narrations
+    of it sat one query away.
+
+    Author-only queries are ONLY added for the audiobook leg. Ebooks have Libgen
+    as a direct fallback and do not need pack-harvesting, and an author query on
+    the ebook side mostly drags in mislabelled bundles.
+    """
+    queries = []
+    if author:
+        queries.append(f"{title} {author}".strip())
+    queries.append(title)
+    if kind == "audiobook" and author:
+        queries.append(f"{author} audiobook")
+
+    out, seen = [], set()
+    for q in queries:
+        for r in _prowlarr_search(q, cats):
+            k = _rel_key(r)
+            if k and k not in seen:
+                seen.add(k)
+                out.append(r)
+    return out
+
+
+# --- harvesting one book out of a collection torrent -----------------------
+#
+# Author omnibuses are how a lot of older audiobooks actually circulate. The
+# release name carries the author only, so both of our gates reject it: the
+# query never surfaces it, and _pick_release insists every significant word of
+# the wanted title appear in the release name.
+#
+# The book's title IS in the torrent's file paths though, so the pack can be
+# added paused, inspected, and stripped down to the one book before a byte of
+# the rest is fetched. The Le Guin pack is 26.4 GB; the Lathe of Heaven files
+# inside it are 198 MB.
+
+PACK_WORDS = ("collection", "collections", "anthology", "omnibus", "pack",
+              "megapack", "mega pack", "complete", "library", "audiobooks",
+              "bundle", "box set", "boxset", "discography")
+PACK_MIN_BYTES = 1_000_000_000      # 1 GB: below this it is not an omnibus
+PACK_MIN_SEEDERS = 3
+PACK_MAX_TRIES = 3
+PACK_META_WAIT = 120                # seconds to wait for metadata
+
+
+def _pick_collections(results, want_title, author):
+    """Pack releases that might contain want_title, best-seeded first."""
+    if not author:
+        return []
+    atoks = [t for t in _sig_tokens(author) if len(t) > 2]
+    if not atoks:
+        return []
+    ttoks = _sig_tokens(want_title)
+    out = []
+    for r in results or []:
+        seeders = r.get("seeders") or 0
+        if seeders < PACK_MIN_SEEDERS:
+            continue
+        rt = _norm(r.get("title") or "")
+        if all(tok in rt for tok in ttoks):
+            continue                      # a direct hit; _pick_release owns it
+        if not all(tok in rt for tok in atoks):
+            continue                      # not this author's pack
+        big = (r.get("size") or 0) >= PACK_MIN_BYTES
+        named = any(w in rt for w in PACK_WORDS)
+        if big or named:
+            out.append((-seeders, r))
+    out.sort(key=lambda x: x[0])
+    return [r for _s, r in out]
+
+
+def _match_files(files, want_title, exts):
+    """Indices of files inside a pack that belong to want_title.
+
+    Matched on the whole relative path, not the basename: the title usually
+    lives in the containing folder ("1971 - The Lathe of Heaven (Guidall)/Lathe
+    of Heaven 01.mp3") and sometimes only there.
+    """
+    ttoks = _sig_tokens(want_title)
+    hits = []
+    for f in files:
+        name = f.get("name") or ""
+        if _ext(name) not in exts:
+            continue
+        if all(tok in _norm(name) for tok in ttoks):
+            hits.append(f)
+    return hits
+
+
+def _best_edition(hits):
+    """One folder's worth of files -- packs often carry several narrations.
+
+    Grouped by containing folder and the largest total wins, which is a proxy
+    for the highest bitrate rip. In the Le Guin pack that picks Guidall (188 MB,
+    64 kbps) over Kane (94.8 MB, 32 kbps).
+    """
+    groups = {}
+    for f in hits:
+        groups.setdefault((f.get("name") or "").rsplit("/", 1)[0], []).append(f)
+    best = max(groups.values(), key=lambda g: sum(x.get("size") or 0 for x in g))
+    return best, len(groups)
+
+
+def _pack_by_name(release):
+    """Hash of a torrent already in qBittorrent matching this release's name."""
+    want = _norm(release.get("title") or "")
+    if not want:
+        return None
+    try:
+        infos = qbit("torrents/info") or []
+    except Exception:
+        return None
+    for t in infos:
+        if isinstance(t, dict) and _norm(t.get("name") or "") == want:
+            return t["hash"]
+    return None
+
+
+def _existing_pack(release):
+    """Hash of this release if qBittorrent already holds it, else None.
+
+    Checked across every category, not just BOOK_CATEGORY: a pack may have been
+    added by hand, and re-adding it raises HTTP 409.
+    """
+    ih = (release.get("infoHash") or "").lower()
+    if not ih:
+        return None
+    try:
+        infos = qbit("torrents/info") or []
+    except Exception:
+        return None
+    for t in infos:
+        if isinstance(t, dict) and (t.get("hash") or "").lower() == ih:
+            return t["hash"]
+    return None
+
+
+def qbit_add_selective(release, want_title, exts):
+    """Add a pack, keep only want_title's files, return (hash, note).
+
+    Returns (None, reason) and removes the torrent again if the pack turns out
+    not to contain the book -- the file list is the first honest evidence either
+    way, and it costs only the metadata fetch to look.
+    """
+    # A pack already in the client is the NORMAL case once a second book is
+    # harvested from it -- qBittorrent answers a duplicate add with 409, which
+    # would otherwise fail the leg. Reuse it and widen the file selection
+    # instead, keeping whatever the earlier book selected.
+    h, reused = _existing_pack(release), False
+    if h:
+        reused = True
+        log(f"pack already in qbit ({h[:8]}); extending its file selection")
+    else:
+        kind, payload = _release_payload(release)
+        before = set(_qbit_hashes())
+        add = {"category": BOOK_CATEGORY, "savepath": BOOK_SAVE_CT,
+               "paused": "true", "stopped": "true"}
+        try:
+            if kind == "magnet":
+                resp = qbit("torrents/add", dict(add, urls=payload))
+            else:
+                resp = _qbit_add_file(payload, extra=add)
+                try:
+                    resp = json.loads(resp)
+                except Exception:
+                    pass
+        except urllib.error.HTTPError as e:
+            # 409 = qBittorrent already holds this torrent. Indexers like 1337x
+            # publish no infoHash, so _existing_pack could not have known;
+            # recover by finding it under its release name.
+            if e.code != 409:
+                raise
+            resp, h = None, _pack_by_name(release)
+            if not h:
+                raise RuntimeError("qbit says duplicate but the pack is not listed")
+            reused = True
+            log(f"pack already in qbit by name ({h[:8]}); extending its selection")
+        if h is None and _add_failed(resp):
+            raise RuntimeError(f"qbit rejected the pack {kind}: {str(resp)[:100]}")
+
+        for _ in range(20):
+            if h:
+                break
+            time.sleep(1)
+            new = set(_qbit_hashes()) - before
+            if new:
+                h = new.pop()
+                break
+        if not h:
+            raise RuntimeError("pack did not appear in qbit after add")
+
+    files = []
+    for _ in range(PACK_META_WAIT):
+        files = qbit(f"torrents/files?hash={h}")
+        if isinstance(files, list) and files:
+            break
+        time.sleep(1)
+    if not files:
+        _qbit_drop(h)
+        return None, "no metadata"
+
+    hits = _match_files(files, want_title, exts)
+    if not hits:
+        if not reused:
+            _qbit_drop(h)
+        return None, f"pack has no files matching {want_title!r} ({len(files)} files)"
+
+    keep, n_editions = _best_edition(hits)
+    keep_ids = {str(f["index"]) for f in keep}
+    if reused:
+        keep_ids |= {str(f["index"]) for f in files if f.get("priority")}
+    drop_ids = [str(f["index"]) for f in files if str(f["index"]) not in keep_ids]
+
+    # Priorities go out in batches: one id-per-file string for a 1,870-file pack
+    # is long enough to trip qBittorrent's request limits.
+    for i in range(0, len(drop_ids), 300):
+        qbit("torrents/filePrio", {"hash": h, "id": "|".join(drop_ids[i:i + 300]),
+                                   "priority": "0"})
+    qbit("torrents/filePrio", {"hash": h, "id": "|".join(sorted(keep_ids)),
+                               "priority": "7"})
+
+    got = qbit(f"torrents/files?hash={h}")
+    sel = [f for f in got if f.get("priority")] if isinstance(got, list) else []
+    if len(sel) != len(keep_ids):
+        if not reused:
+            _qbit_drop(h)          # never delete a pack another book is using
+        return None, f"priority set did not stick ({len(sel)} != {len(keep_ids)})"
+
+    qbit("torrents/start", {"hashes": h})
+    mb = sum(f.get("size") or 0 for f in keep) / 1e6
+    note = (f"{len(keep)} file(s), {mb:.0f} MB of "
+            f"{(release.get('size') or 0) / 1e9:.1f} GB"
+            + (f", {n_editions} editions offered" if n_editions > 1 else ""))
+    return h, note
+
+
+def _qbit_drop(h):
+    try:
+        qbit("torrents/delete", {"hashes": h, "deleteFiles": "true"})
+    except Exception as e:
+        log(f"could not remove pack {h}: {e!r}")
 
 
 # --- qBittorrent -----------------------------------------------------------
@@ -647,12 +907,25 @@ class _MagnetRedirect(Exception):
 
 
 class _CatchMagnet(urllib.request.HTTPRedirectHandler):
-    """Prowlarr answers /download with a 302 to magnet: for magnet-only indexers,
-    which urllib cannot follow (unknown scheme). Capture it instead."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    """Prowlarr answers /download with a 30x to magnet: for magnet-only indexers.
+
+    LANDMINE: hooking redirect_request here does NOT work. urllib's
+    HTTPRedirectHandler.http_error_30x validates the redirect target scheme and
+    raises HTTPError for anything that is not http/https/ftp *before* it ever
+    calls redirect_request -- so a magnet: target escapes as
+    "HTTP Error 301: Moved Permanently - Redirection to url ..." and
+    redirect_request is never reached. Hook the error methods instead.
+
+    CPython itself aliases 301/303/307/308 to http_error_302, so delegating the
+    non-magnet path to super().http_error_302 preserves stock behaviour.
+    """
+    def http_error_302(self, req, fp, code, msg, headers):
+        newurl = headers.get("location") or headers.get("uri") or ""
         if newurl.startswith("magnet:"):
             raise _MagnetRedirect(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
 def _release_payload(rel):
@@ -686,15 +959,22 @@ def _release_payload(rel):
     raise RuntimeError("release has no usable magnet or .torrent")
 
 
-def _qbit_add_file(data):
-    """Upload raw .torrent bytes (multipart/form-data)."""
+def _qbit_add_file(data, extra=None):
+    """Upload raw .torrent bytes (multipart/form-data).
+
+    `extra` overrides or adds form fields -- collection harvesting needs the
+    torrent to arrive paused so its file list can be pruned before any of the
+    pack downloads.
+    """
     boundary = "----mediabridge" + str(int(time.time() * 1000))
 
     def field(name, value):
         return (f"--{boundary}\r\nContent-Disposition: form-data; "
                 f'name="{name}"\r\n\r\n{value}\r\n').encode()
 
-    body = field("category", BOOK_CATEGORY) + field("savepath", BOOK_SAVE_CT)
+    fields = {"category": BOOK_CATEGORY, "savepath": BOOK_SAVE_CT}
+    fields.update(extra or {})
+    body = b"".join(field(k, v) for k, v in fields.items())
     body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"torrents\"; "
              f'filename="release.torrent"\r\n'
              f"Content-Type: application/x-bittorrent\r\n\r\n").encode() + data + b"\r\n"
@@ -819,7 +1099,7 @@ def libgen_ebook(title, author):
         try:
             html = _lg_get(f"{base}/index.php?req={query}", timeout=30).decode("utf-8", "ignore")
         except Exception as e:
-            log(f"libgen search {base} failed: {str(e)[:60]}")
+            log(f"libgen search {base} failed: {str(e)[:200]}")
             continue
         pick = _lg_pick(_lg_rows(html), title)
         if not pick:
@@ -827,7 +1107,7 @@ def libgen_ebook(title, author):
         try:
             data = _lg_download(pick["md5"], base)
         except Exception as e:
-            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:60]}")
+            log(f"libgen download {pick['md5'][:8]} failed: {str(e)[:200]}")
             continue
         safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
         dest = os.path.join(EBOOK_DIR, safe)
@@ -870,7 +1150,32 @@ def add_book(req):
                              "path": onshelf if kind == "ebook" else None}
             log(f"book '{title}': {kind} already on shelf -> {onshelf}")
             continue
-        rel = _pick_release(_search_books(title, author, cats), title, formats, require)
+        results = _search_books(title, author, cats, kind)
+        rel = _pick_release(results, title, formats, require)
+
+        if not rel and kind == "audiobook":
+            # Nothing named for this book -- it may still be sitting inside an
+            # author omnibus. Inspecting a pack costs only its metadata fetch.
+            picked = None
+            for pack in _pick_collections(results, title, author)[:PACK_MAX_TRIES]:
+                try:
+                    ph, note = qbit_add_selective(pack, title, _wanted_ext(kind))
+                except Exception as e:
+                    log(f"book '{title}': pack {pack.get('title')!r} failed: {e!r}")
+                    continue
+                if ph:
+                    picked = (ph, note, pack)
+                    break
+                log(f"book '{title}': pack {pack.get('title')!r} skipped -- {note}")
+            if picked:
+                ph, note, pack = picked
+                grabbed[kind] = {"hash": ph, "release": (pack.get("title") or "")[:120],
+                                 "seeders": pack.get("seeders"), "from_collection": True,
+                                 "note": note}
+                log(f"book '{title}': harvested {kind} from pack "
+                    f"{pack.get('title')!r} -- {note}")
+                continue
+
         if not rel:
             tried.append(f"no {kind} torrent")
             missing[kind] = "no torrent found"
@@ -878,8 +1183,8 @@ def add_book(req):
         try:
             h = qbit_add(rel)
         except Exception as e:
-            tried.append(f"{kind} grab failed: {str(e)[:60]}")
-            missing[kind] = f"grab failed: {str(e)[:60]}"
+            tried.append(f"{kind} grab failed: {str(e)[:200]}")
+            missing[kind] = f"grab failed: {str(e)[:200]}"
             continue
         grabbed[kind] = {"hash": h, "release": (rel.get("title") or "")[:120],
                          "seeders": rel.get("seeders")}
@@ -896,8 +1201,8 @@ def add_book(req):
                 tried.append("no ebook on libgen")
                 missing["ebook"] = "not on torrents or Libgen"
         except Exception as e:
-            tried.append(f"libgen failed: {str(e)[:60]}")
-            missing["ebook"] = f"libgen failed: {str(e)[:60]}"
+            tried.append(f"libgen failed: {str(e)[:200]}")
+            missing["ebook"] = f"libgen failed: {str(e)[:200]}"
 
     if not grabbed:
         raise RuntimeError("no book found (" + ", ".join(tried) + ")")
@@ -974,7 +1279,7 @@ def _safe_title(title):
     return "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Unknown"
 
 
-def _import_book(title, kind, tor):
+def _import_book(title, kind, tor, meta=None):
     """True on import, "rejected" if the release is junk, False if retryable."""
     dest_root = EBOOK_DIR if kind == "ebook" else AUDIOBOOK_DIR
     safe = _safe_title(title)
@@ -996,6 +1301,16 @@ def _import_book(title, kind, tor):
                key=f"junk:{title}:{kind}")
             return "rejected"
         log(f"imported {kind} '{title}' -> {dest} ({n} file(s))")
+        if kind == "audiobook":
+            nav = _audiobook_nav(dest)
+            if nav:
+                if meta is not None:
+                    meta["nav"] = nav
+                if nav["nav"] == "single":
+                    log(f"audiobook '{title}': ONE file, no chapter markers -- "
+                        f"no in-app navigation (Place's transcript map still seeks)")
+                elif nav["nav"] == "chapters":
+                    log(f"audiobook '{title}': {nav.get('chapters')} chapter markers")
         return True
     except Exception as e:
         log(f"import '{title}' {kind} FAILED: {e!r}")
@@ -1030,6 +1345,53 @@ def _has_audio(root):
         if any(_ext(f) in AUDIO_EXT for f in files):
             return True
     return False
+
+
+# The only bad case is ONE audio file with no chapter markers: a 39 h scrub bar
+# with nothing to jump to. Multi-file releases are navigable by track and need
+# no probe at all. Measured on the real shelf: format does NOT predict this --
+# The Fort Bragg Cartel is an .m4b with zero chapters, while Homo Deus is 61
+# .mp3s and navigates fine. Only the file/chapter count tells you, and neither
+# is published by any indexer at search time (Prowlarr reports files=None, and
+# AudiobookBay sends a constant placeholder size), so this has to happen here.
+#
+# Advisory only. It runs AFTER the files are already in the library and must
+# never delay or fail an import, so every failure path returns "unknown" and the
+# caller carries on regardless.
+NAV_PROBE_TIMEOUT = 15          # seconds; give up quick rather than hold a book
+
+
+def _audiobook_nav(dest):
+    """{'nav': tracks|chapters|single|unknown, ...} or None if there is no audio."""
+    try:
+        auds = []
+        for dp, _dd, files in os.walk(dest):
+            auds += [os.path.join(dp, f) for f in files if _ext(f) in AUDIO_EXT]
+        if not auds:
+            return None
+        if len(auds) > 1:
+            # More than one file: the player has track boundaries to seek by.
+            return {"nav": "tracks", "files": len(auds)}
+
+        # Exactly one file -- the only case that can be a blob. Ask ffprobe for
+        # chapter markers. The box has no ffmpeg of its own; it lives in the
+        # Jellyfin container, which mounts /srv/media/data/media at /media.
+        import subprocess
+        rel = auds[0].replace("/srv/media/data/media/", "", 1)
+        out = subprocess.run(
+            ["docker", "exec", "jellyfin", "/usr/lib/jellyfin-ffmpeg/ffprobe",
+             "-v", "error", "-print_format", "json", "-show_chapters",
+             "/media/" + rel],
+            capture_output=True, text=True, timeout=NAV_PROBE_TIMEOUT)
+        if out.returncode != 0:
+            return {"nav": "unknown", "files": 1}
+        chapters = len(json.loads(out.stdout or "{}").get("chapters") or [])
+        return {"nav": "chapters" if chapters > 1 else "single",
+                "files": 1, "chapters": chapters}
+    except Exception:
+        # Timeout, docker down, unreadable file -- all the same answer: we do not
+        # know, and it is not worth holding the import to find out.
+        return {"nav": "unknown", "files": None}
 
 
 def shelf_copy(title, kind):
@@ -1299,7 +1661,7 @@ def monitor_books():
             pcts.append(pct)
             finished = (t.get("progress") or 0) >= 1.0
             if finished and not meta.get("imported") and not meta.get("rejected"):
-                res = _import_book(r["title"], kind, t)
+                res = _import_book(r["title"], kind, t, meta)
                 if res is True:
                     meta["imported"] = True
                     changed = True
@@ -1346,7 +1708,17 @@ def monitor_books():
         if etas:
             eta = f"{max(etas) // 60}m"
 
-        new_status = "downloaded" if (done_all and all(m.get("imported") for m in books.values()))                      else "downloading"
+        # A book request has TWO legs but only one status column. Finishing a
+        # half-failed request as "downloaded" strands it forever: the daemon
+        # never revisits a finished row, and Cue's dedupe (App.jsx) only lets a
+        # `failed` row be re-pushed -- so the only recovery was hand-deleting the
+        # row from the DB. Let the terminal state carry the missing leg instead.
+        # Per-leg detail still rides in `legs`/stamp_fulfillment, so the Cue card
+        # keeps showing which half actually landed.
+        if done_all and all(m.get("imported") for m in books.values()):
+            new_status = "failed" if (d.get("missing") or {}) else "downloaded"
+        else:
+            new_status = "downloading"
         if d.get("pct") != pct or d.get("eta") != eta or r["status"] != new_status or changed:
             d["pct"], d["eta"] = pct, eta
             sb("PATCH", f"media_requests?id=eq.{r['id']}",
@@ -1602,6 +1974,43 @@ def _is_dead(rec, qt):
     return None, 0
 
 
+def _grab_best_seeded(app_name, target, rec):
+    """Pick the replacement download by SEEDERS instead of letting the app choose.
+
+    Sonarr/Radarr treat seeders as a minimum threshold only - their ranking is
+    quality tier -> custom format score -> indexer priority - so a plain
+    re-search can hand back another dead release. Here we take the releases the
+    app ALREADY APPROVES (so every quality, size and codec rule still applies)
+    and grab the healthiest one via the manual-grab endpoint.
+
+    Returns a short description of what it grabbed, or None to fall back to the
+    normal re-search.
+    """
+    if app_name == "radarr":
+        ident = rec.get("movieId")
+        path = "release?movieId=%s" % ident if ident else None
+    else:
+        ident = rec.get("episodeId")
+        path = "release?episodeId=%s" % ident if ident else None
+    if not path:
+        return None
+    code, rels = arr(target, "GET", path)
+    if code != 200 or not isinstance(rels, list):
+        return None
+    ok = [x for x in rels
+          if x.get("approved") and x.get("guid") and x.get("indexerId") is not None]
+    if not ok:
+        return None
+    best = max(ok, key=lambda x: (x.get("seeders") or 0))
+    if (best.get("seeders") or 0) <= 0:
+        return None
+    code, _ = arr(target, "POST", "release",
+                  {"guid": best["guid"], "indexerId": best["indexerId"]})
+    if code not in (200, 201, 202):
+        return None
+    return "%s (%s seeders)" % ((best.get("title") or "?")[:40], best.get("seeders"))
+
+
 def reap_stalled(app_name, target, search_cmd, id_field):
     """Remove + blocklist + re-search downloads that are going nowhere."""
     code, q = arr(target, "GET", "queue?pageSize=100")
@@ -1623,15 +2032,19 @@ def reap_stalled(app_name, target, search_cmd, id_field):
         if not prev or prev["left"] != left:        # progress moved (or first sight) -> reset clock
             _stall[key] = {"first": now, "left": left}
         elif now - prev["first"] >= grace:          # truly stuck -> reap
-            arr(target, "DELETE", f"queue/{rid}?removeFromClient=true&blocklist=true")
+            arr(target, "DELETE",
+                f"queue/{rid}?removeFromClient=true&blocklist=true"
+                f"&skipRedownload=true")   # we pick the replacement ourselves
             wanted_id = r.get(id_field)
-            if wanted_id:
+            picked = _grab_best_seeded(app_name, target, r)
+            if not picked and wanted_id:
                 arr(target, "POST", "command", {"name": search_cmd, f"{id_field}s": [wanted_id]})
-            log(f"reaped {app_name} ({reason}): {(r.get('title') or '?')[:40]} -> blocklisted + re-searched")
+            how = f"seeder-first grab: {picked}" if picked else "re-searched"
+            log(f"reaped {app_name} ({reason}): {(r.get('title') or '?')[:40]} -> blocklisted + {how}")
             title = (r.get("title") or "?")[:70]
             tg(f"Dropped a dead download: {title}\nWhy: {reason}\n"
-               f"Blocklisted it and searched again. Ask the bot for the download "
-               f"status if it goes quiet.", key=f"reap:{title}")
+               f"Replacement: {picked if picked else 'searched again'}. Ask the bot "
+               f"for the download status if it goes quiet.", key=f"reap:{title}")
             _stall.pop(key, None)
             stalled_now.discard(key)
     for key in list(_stall):                         # forget items no longer stalled
@@ -1760,7 +2173,7 @@ def reap_stalled_books():
                 nh = qbit_add(rel)
             except Exception as e:
                 meta["dead"] = True
-                log("book " + repr(title) + ": re-grab failed: " + str(e)[:60])
+                log("book " + repr(title) + ": re-grab failed: " + str(e)[:200])
                 continue
             meta["hash"] = nh
             meta["release"] = (rel.get("title") or "")[:120]
