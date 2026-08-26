@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useDownloads, statusView } from '../lib/downloads'
 
 // Download bubble + tray, docked in the Masthead's top-right cluster (it used to
@@ -122,19 +123,53 @@ function Row({ row, onDelete }) {
 export function DownloadTray() {
   const [open, setOpen] = useState(false)
   const { rows, active, remove } = useDownloads()
+  const btnRef = useRef(null)
+
+  // The tray renders inside the Masthead, which sits inside App's z-index 2
+  // page wrapper — a stacking context. A fixed backdrop rendered from here is
+  // capped at layer 2 and loses to BottomNav (z 40) and the Capture FAB (z 35),
+  // so a tap on either went to them instead of dismissing the tray. Portal both
+  // the backdrop and the panel out to #cue-overlay-root (see App.jsx), which is
+  // unpositioned and therefore lands them in the root stacking context.
+  const [host, setHost] = useState(null)
+  // Portalling costs the panel its `position: absolute` anchor, so the button's
+  // viewport rect has to be measured — and re-measured, because the Masthead is
+  // a static header that scrolls away under the panel.
+  const [anchor, setAnchor] = useState(null)
+
+  useEffect(() => {
+    setHost(document.getElementById('cue-overlay-root') || null)
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return undefined
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect()
+      if (!r) return
+      const top = r.bottom + 10
+      setAnchor({
+        top,
+        right: Math.max(8, window.innerWidth - r.right),
+        // Keep the panel inside the viewport however far down the button sits.
+        maxHeight: Math.max(120, Math.min(440, window.innerHeight * 0.6, window.innerHeight - top - 16)),
+      })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [open])
 
   const busy = active.length > 0
   const downloading = active.some((r) => r.status === 'downloading')
 
   return (
     <div style={{ position: 'relative', display: 'inline-flex' }}>
-      {open && (
-        <div onClick={() => setOpen(false)} style={{
-          position: 'fixed', inset: 0, zIndex: 44, background: 'transparent',
-        }} />
-      )}
-
       <button
+        ref={btnRef}
         onClick={() => setOpen((o) => !o)}
         aria-label="Downloads"
         style={{
@@ -161,17 +196,21 @@ export function DownloadTray() {
         )}
       </button>
 
-      {open && (
-        <div style={{
-          position: 'absolute', zIndex: 46,
-          top: 'calc(100% + 10px)', right: 0,
-          width: 300, maxWidth: 'calc(100vw - 32px)',
-          maxHeight: 'min(60vh, 440px)', overflowY: 'auto',
-          background: 'var(--paper)', color: 'var(--text)',
-          border: '1px solid var(--hairline-strong)', borderRadius: 14,
-          boxShadow: '0 20px 44px -16px rgba(0,0,0,0.6)',
-          WebkitOverflowScrolling: 'touch',
-        }}>
+      {open && host && anchor && createPortal(
+        <>
+          <div onClick={() => setOpen(false)} style={{
+            position: 'fixed', inset: 0, zIndex: 44, background: 'transparent',
+          }} />
+          <div style={{
+            position: 'fixed', zIndex: 46,
+            top: anchor.top, right: anchor.right,
+            width: 300, maxWidth: 'calc(100vw - 32px)',
+            maxHeight: anchor.maxHeight, overflowY: 'auto',
+            background: 'var(--paper)', color: 'var(--text)',
+            border: '1px solid var(--hairline-strong)', borderRadius: 14,
+            boxShadow: '0 20px 44px -16px rgba(0,0,0,0.6)',
+            WebkitOverflowScrolling: 'touch',
+          }}>
           <div style={{
             padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 8,
             justifyContent: 'space-between',
@@ -196,7 +235,9 @@ export function DownloadTray() {
           ) : (
             rows.map((r) => <Row key={r.id} row={r} onDelete={remove} />)
           )}
-        </div>
+          </div>
+        </>,
+        host,
       )}
     </div>
   )
