@@ -271,6 +271,79 @@ export async function fetchWatchProviders(tmdbId, type) {
   return tier.map((p) => p?.provider_name).filter(Boolean)
 }
 
+// ── trailers ─────────────────────────────────────────────────
+// TMDB hands back every video it holds for a title — clips, featurettes,
+// opening credits, award-show packages — in no useful order. One current film
+// answered with 74 videos and not a single trailer in the first eight. So rank
+// rather than taking results[0]: real Trailers before Teasers, official studio
+// uploads before fan re-cuts, then the highest resolution. Anything that is not
+// a trailer or a teaser is discarded, and only YouTube is kept (Vimeo entries
+// carry a key that a youtube.com/watch URL cannot use).
+const TRAILER_KIND = { Trailer: 0, Teaser: 1 }
+
+// Sort key, lowest first. null = not a trailer at all.
+function rankVideo(v) {
+  if (!v || v.site !== 'YouTube' || !v.key) return null
+  const kind = TRAILER_KIND[v.type]
+  if (kind === undefined) return null
+  return [kind, v.official ? 0 : 1, -(Number(v.size) || 0)]
+}
+
+function sortsBefore(a, b) {
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return a[i] < b[i]
+  }
+  return false
+}
+
+// The YouTube key of the best trailer in a TMDB /videos payload, or null if it
+// holds none. Pure and exported so the ranking is testable without the network.
+export function pickTrailerKey(results) {
+  let bestKey = null
+  let bestRank = null
+  for (const v of results || []) {
+    const rank = rankVideo(v)
+    if (!rank) continue
+    if (!bestRank || sortsBefore(rank, bestRank)) {
+      bestRank = rank
+      bestKey = v.key
+    }
+  }
+  return bestKey
+}
+
+// A YouTube search for the title. This is the fallback when TMDB holds no
+// trailer, and the only option for a suggestion carrying no tmdb_id (TasteDive
+// and Claude picks often don't). It always resolves to something watchable,
+// which a dead or missing link would not.
+export function youtubeSearchUrl(title, year) {
+  const q = [title, year, 'trailer'].filter(Boolean).join(' ')
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`
+}
+
+// The best YouTube trailer TMDB knows about, or null if it has none.
+export async function fetchTrailerUrl(tmdbId, type) {
+  if (!API_KEY || tmdbId == null) return null
+  if (type !== 'movie' && type !== 'tv') return null
+
+  const cacheKey = `trailer.${type}.${tmdbId}`
+  // Cached as a { url } wrapper on purpose: a title with no trailer caches as
+  // url:null, and a bare null would be indistinguishable from a cache miss.
+  const cached = readCache(cacheKey)
+  if (cached) return cached.url || null
+
+  const res = await fetch(`${BASE}/${type}/${tmdbId}/videos?api_key=${API_KEY}&language=en-US`).catch(() => null)
+  // Deliberately not cached: a network blip should retry next open, not stick
+  // as "no trailer" for six hours.
+  if (!res || !res.ok) return null
+  const data = await res.json().catch(() => null)
+
+  const bestKey = pickTrailerKey(data?.results)
+  const url = bestKey ? `https://www.youtube.com/watch?v=${bestKey}` : null
+  writeCache(cacheKey, { url })
+  return url
+}
+
 // The full feed definition, in render order. Each row lazily fetches itself so
 // the tab paints immediately and fills in as TMDB answers.
 export function feedRows() {
