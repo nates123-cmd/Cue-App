@@ -50,7 +50,8 @@ hand the .torrent *bytes* to qBittorrent, hardlink the result into the library.
    download, which takes seconds instead of hours.
 2. `monitor_books` imports each finished torrent (hardlink, so it keeps seeding).
 3. The epub is repaired (`<dc:language>` + charset declarations, or Amazon
-   silently drops it) and emailed to the Kindle, exactly once.
+   silently drops it) and emailed to the Kindle, exactly once — see the ledger
+   below for what "once" actually rests on.
 4. **New:** the moment the epub is on disk, `kick_cwa_ingest()` runs the same
    sweep the 10-minute cron runs, so the OPDS shelf the X4 pulls from has the
    book in seconds. It takes the same `flock`, so racing the cron is a no-op.
@@ -64,6 +65,25 @@ Each step stamps `recommendations.fulfillment` (see the migration
 sticky answer long after the download tray has forgotten the push. The two
 daemons share that column and **only ever merge their own legs** — `bridge.py`
 owns `ebook`/`audiobook`/`download`, the poller owns `place`.
+
+## The Kindle send ledger
+
+`/home/nate/media-bridge/kindle-sent.json`, keyed by
+`kindle address | normalised title`. It exists because `meta['kindle']` — the
+stamp that used to be the *only* "already mailed" record — lives inside
+`media_requests.detail`, which `process()` rewrites from scratch on every push.
+Push a book that is already on the shelf and `shelf_copy()` returns a fresh leg
+with `imported: True` and no `kindle` key, so the next tick mails it again. Six
+titles went out twice that way and The Stench of Honolulu went out three times.
+
+Keyed by address, not just title, on purpose: one shelf, two readers, and the
+second person to want a book still gets their own copy.
+
+- `seed-kindle-ledger.py` backfills it from existing rows *and* the journal
+  (some books were mailed off rows that no longer exist). Dry-run by default;
+  `--apply` writes. Idempotent — it only ever adds keys.
+- `detail.force_kindle: true` on a request mails it regardless, for when a book
+  has been deleted off the device and is genuinely wanted again.
 
 ## Landmines
 
@@ -83,6 +103,10 @@ owns `ebook`/`audiobook`/`download`, the poller owns `place`.
 - **`bridge.py` defines a function named `http()`**, which shadows the stdlib
   `http` package. `from http.cookiejar import CookieJar`, never
   `import http.cookiejar`.
+- **The repo copy of these two files went ~900 lines stale** (bridge.py: 1390
+  here vs 2672 on the box) while fixes were made directly on the box. `scp` the
+  live file *down* and diff before you ever deploy this direction, or you will
+  quietly revert months of prod work.
 - **Read-modify-write on `media_requests.detail` races the tick loop.** Stop the
   service before hand-editing that JSON, or an in-flight tick will overwrite you
   (this is how a book got emailed to the Kindle twice).

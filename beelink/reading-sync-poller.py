@@ -31,6 +31,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import absclient
 from audiomap import audio_text_fraction, push_audio
 from epubpos import Book, document_id
 from kosync import Kosync, KosyncError, push_position
@@ -41,6 +42,48 @@ POLL_SECONDS = int(os.environ.get('POLL_SECONDS', '10'))
 ALIGN_DIR = os.environ.get('ALIGN_DIR', '/srv/media/reading-align')
 
 _cache = {}
+
+# One box, several readers. Both device legs are single-identity, so each is
+# pinned to an owner and everyone else is served from their own credential.
+# LANDMINE: main() calls load_env() AFTER this module body runs, so anything
+# read from os.environ at import is empty. These gates were written that way
+# first and silently allowed a second reader to push to the owner's X4.
+# Read config at CALL time in this file, always.
+def _x4_owner():
+    return os.environ.get('X4_OWNER_ID', '')        # the only person with an X4
+
+
+def _abs_owner():
+    return os.environ.get('ABS_OWNER_ID', '')       # whose account ABS_TOKEN is
+
+
+def _abs_token_path():
+    return os.environ.get('ABS_USER_TOKENS',
+                          '/home/nate/media-bridge/abs-users.json')
+
+
+def abs_token_for(user_id):
+    """(token, why_not) for this requester's Audiobookshelf account.
+
+    token None + why_not None means 'use the default ABS_TOKEN'. A token is
+    NEVER inherited: without one of their own, a second reader gets why_not
+    and the audiobook leg is skipped, because the alternative is silently
+    moving the owner's listening position.
+    """
+    abs_owner = _abs_owner()
+    if not abs_owner or user_id == abs_owner:
+        return None, None
+    try:
+        with open(_abs_token_path()) as fh:
+            tok = (json.load(fh) or {}).get(user_id)
+    except FileNotFoundError:
+        tok = None
+    except Exception as e:
+        log(f'abs token map unreadable: {e!r}')
+        tok = None
+    if tok:
+        return tok, None
+    return None, 'no Audiobookshelf account linked for this login'
 
 
 def log(msg):
@@ -82,7 +125,7 @@ def get_book(path):
     return book
 
 
-def resolve_resume(path, book, doc, source_pref):
+def resolve_resume(path, book, doc, source_pref, allow_x4=True, allow_abs=True):
     """"Continue on Kindle": read the current position off the X4 (kosync) and
     the audiobook (ABS), take whichever is furthest, and hand back a phrase to
     search on the Kindle.
@@ -95,7 +138,7 @@ def resolve_resume(path, book, doc, source_pref):
     sources = {}  # name -> text fraction 0-1
 
     # X4 / reMarkable: kosync stores the last position the device synced.
-    if source_pref in ('auto', 'x4'):
+    if allow_x4 and source_pref in ('auto', 'x4'):
         try:
             ks = Kosync()
             if ks.user and ks.key and ks.authorized():
@@ -113,7 +156,7 @@ def resolve_resume(path, book, doc, source_pref):
             log(f'  resume: kosync read failed: {e}')
 
     # Audiobook: ABS currentTime mapped back through the chapter map.
-    if source_pref in ('auto', 'abs'):
+    if allow_abs and source_pref in ('auto', 'abs'):
         try:
             hit = audio_text_fraction(path, book)
             if hit:
@@ -123,8 +166,10 @@ def resolve_resume(path, book, doc, source_pref):
 
     if not sources:
         return ('not_found', None,
-                'no synced position yet -- read on the X4 (and sync) or listen '
-                'in Audiobookshelf first')
+                ('no synced position yet -- listen in Audiobookshelf first'
+                 if not allow_x4 else
+                 'no synced position yet -- read on the X4 (and sync) or listen '
+                 'in Audiobookshelf first'))
 
     # Furthest wins: you want to resume where you last left off across devices.
     picked_src = max(sources, key=sources.get)
@@ -172,13 +217,29 @@ def resolve_row(row):
     doc = document_id(path)
     near = row.get('near')
 
+    user_id = row.get('user_id') or ''
+    allow_x4 = (not _x4_owner()) or user_id == _x4_owner()
+    abs_token, abs_why_not = abs_token_for(user_id)
+    absclient.use_token(abs_token)
+
     if row['anchor_type'] == 'resume':
-        return resolve_resume(path, book, doc, row.get('anchor_value') or 'auto')
+        return resolve_resume(path, book, doc, row.get('anchor_value') or 'auto',
+                              allow_x4=allow_x4, allow_abs=not abs_why_not)
 
     if row['anchor_type'] == 'phrase':
         pos, alts = book.find_phrase(row['anchor_value'], near=near)
         if not pos:
-            return 'not_found', None, 'phrase not found in this book'
+            # A miss is nearly always a typo, so hand back what the reader
+            # probably meant rather than a dead end. Each suggestion carries
+            # the book's OWN wording, so tapping one resubmits as an exact hit.
+            try:
+                sugg = book.near_matches(row['anchor_value'])
+            except Exception as e:                # a failed guess must not mask the miss
+                log(f'near_matches failed: {e!r}')
+                sugg = []
+            detail = ('phrase not found -- did you mean one of these?' if sugg
+                      else 'phrase not found in this book')
+            return 'not_found', {'suggestions': sugg} if sugg else None, detail
     else:
         try:
             pct = float(str(row['anchor_value']).strip().rstrip('%'))
@@ -214,8 +275,20 @@ def resolve_row(row):
         ],
     }
 
-    targets = row.get('targets') or ['x4']
+    targets = list(row.get('targets') or ['x4'])
     pushed = []
+    skipped = {}
+
+    # The app asks for both legs by default; the box decides what this reader
+    # actually owns. Dropping a target is normal, not a failure.
+    if 'x4' in targets and not allow_x4:
+        targets.remove('x4')
+        skipped['x4'] = 'no X4 on this account'
+    if 'abs' in targets and abs_why_not:
+        targets.remove('abs')
+        skipped['abs'] = abs_why_not
+    if skipped:
+        result['skipped'] = skipped
 
     if 'x4' in targets:
         ks = Kosync()
@@ -245,6 +318,10 @@ def resolve_row(row):
             result['abs'] = f'{type(e).__name__}: {e}'
 
     result['pushed'] = pushed
+    if not pushed and skipped:
+        # Nothing to push to, but the position itself resolved -- still worth
+        # showing, since the Kindle phrase is the useful half for that reader.
+        return 'done', result, '; '.join(skipped.values())
     return 'done', result, None
 
 
@@ -409,6 +486,8 @@ def tick():
         except Exception as e:
             traceback.print_exc()
             status, result, detail = 'failed', None, f'{type(e).__name__}: {e}'
+        finally:
+            absclient.use_token(None)   # identity must not leak to the next row
         log(f'  -> {status}' + (f' ({detail})' if detail else ''))
         finish(rid, status, result, detail)
 
