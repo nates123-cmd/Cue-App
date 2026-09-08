@@ -48,6 +48,10 @@ export function statusView(row) {
       return { label: 'Done', tone: 'done', pct: 100 }
     case 'failed':
       return { label: 'Failed', tone: 'fail', pct: null, msg: d.msg }
+    case 'cancelled':
+      // Deliberately called off, which is not a failure: the stack didn't lose,
+      // nobody wants it any more. Muted rather than red, and no error message.
+      return { label: 'Stopped', tone: 'wait', pct: null }
     default:
       return { label: row.status || 'Unknown', tone: 'wait', pct: null }
   }
@@ -57,7 +61,7 @@ export function statusView(row) {
 // Radarr answers "already in Radarr" so it never gets an arr_id and would sit on
 // "Searching" forever. Collapse duplicates by title+type and keep the row that
 // actually tracks a download (has arr_id, furthest along).
-const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, pending: 1, failed: 0 }
+const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, pending: 1, failed: 0, cancelled: 0 }
 
 function score(row) {
   const d = parseDetail(row.detail)

@@ -207,7 +207,11 @@ export default function App() {
       .select('id')
       .eq('media_type', target.media_type)
       .eq('title', item.title)
-      .neq('status', 'failed')
+      // A dead row must not block a re-push. 'failed' means the stack tried and
+      // lost; 'cancelled' means Nate called it off. Either way he is allowed to
+      // ask again, and if these are not excluded the second push silently
+      // returns {duplicate:true} and nothing happens.
+      .not('status', 'in', '("failed","cancelled")')
     dupQuery = season == null ? dupQuery.is('season', null) : dupQuery.eq('season', season)
     const { data: existing } = await dupQuery.limit(1)
     if (existing && existing.length > 0) return { duplicate: true }
