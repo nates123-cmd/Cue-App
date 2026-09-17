@@ -2,7 +2,7 @@
 // network, no Supabase. The cases are anchored to the 2026-09-08 incident in
 // which a request Nate had called off had no way to say so.
 import { describe, it, expect } from 'vitest'
-import { statusView, isActive, dedupeRows } from '../src/lib/downloads.js'
+import { statusView, isActive, dedupeRows, optionsOf } from '../src/lib/downloads.js'
 
 const row = (status, detail) => ({ status, detail: detail ? JSON.stringify(detail) : null })
 
@@ -82,5 +82,47 @@ describe('dedupeRows — a dead row must not outrank a live one', () => {
     const s1 = { id: 1, title: 'Show', media_type: 'tv', season: 1, status: 'cancelled' }
     const s2 = { id: 2, title: 'Show', media_type: 'tv', season: 2, status: 'downloading' }
     expect(dedupeRows([s1, s2])).toHaveLength(2)
+  })
+})
+
+// "Show me options" (2026-09-17): the bridge parks a movie push on 'choosing'
+// with the candidate list in detail.options, and Cue writes the pick to `choice`.
+describe('choosing — a push waiting on a pick', () => {
+  const opts = [
+    { tok: 'a', title: 'Movie 1080p WEB-DL', gb: 2.1, seeders: 40, ok: true, why: '' },
+    { tok: 'b', title: 'Movie 1080p x265', gb: 1.2, seeders: 90, ok: false, why: 'is smaller than minimum allowed' },
+  ]
+
+  it('is active, so the tray badge counts it', () => {
+    expect(isActive('choosing')).toBe(true)
+  })
+
+  it('asks for a pick until one is written, then reads as grabbing', () => {
+    const waiting = statusView({ status: 'choosing', detail: JSON.stringify({ options: opts }) })
+    expect(waiting).toMatchObject({ label: 'Pick a copy', tone: 'ask' })
+    const picked = statusView({ status: 'choosing', choice: 'a', detail: JSON.stringify({ options: opts }) })
+    expect(picked).toMatchObject({ label: 'Grabbing…', tone: 'go' })
+  })
+
+  it('surfaces a failed grab so another copy can be picked', () => {
+    const v = statusView({ status: 'choosing', detail: JSON.stringify({ options: opts, choice_error: 'Radarr said 500' }) })
+    expect(v.msg).toBe('Radarr said 500')
+  })
+
+  it('lists the options the bridge wrote, and nothing on rows without them', () => {
+    expect(optionsOf({ detail: JSON.stringify({ options: opts }) })).toHaveLength(2)
+    expect(optionsOf({ detail: JSON.stringify({ options: [{ title: 'no token' }] }) })).toEqual([])
+    expect(optionsOf({ detail: 'legacy string' })).toEqual([])
+    expect(optionsOf({ detail: null })).toEqual([])
+  })
+
+  it('keeps a choosing row over a pending duplicate', () => {
+    const rows = dedupeRows([
+      { id: 1, title: 'X', media_type: 'movie', status: 'pending', detail: null },
+      { id: 2, title: 'X', media_type: 'movie', status: 'choosing', detail: JSON.stringify({ arr_id: 7, options: opts }) },
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0].id).toBe(2)
+    expect(rows[0].ids).toEqual([1, 2])
   })
 })

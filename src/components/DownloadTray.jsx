@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useDownloads, statusView } from '../lib/downloads'
+import { useDownloads, statusView, optionsOf } from '../lib/downloads'
+import { OptionList } from './PushModeSheet'
 
 // Download bubble + tray, docked in the Masthead's top-right cluster (it used to
 // float over the page). Shows anything Cue pushed to the home *arr stack, with
@@ -9,6 +10,7 @@ import { useDownloads, statusView } from '../lib/downloads'
 
 const TONE = {
   wait: 'var(--text-soft)',
+  ask: 'var(--signal)',
   go: 'var(--signal)',
   done: '#4c9a6a',
   fail: '#c0503a',
@@ -28,7 +30,7 @@ function DownloadIcon({ size = 15 }) {
   )
 }
 
-function Row({ row, onDelete }) {
+function Row({ row, onDelete, onPicked }) {
   const [dx, setDx] = useState(0)
   const [dragging, setDragging] = useState(false)
   const startX = useRef(null)
@@ -109,7 +111,15 @@ function Row({ row, onDelete }) {
             }} />
           </div>
         )}
-        {v.tone === 'fail' && v.msg && (
+        {/* "Show me options": the bridge parked this on a choice. List the
+            candidates right here so a pick made after the popup closed still
+            lands on the same row (and the same Telegram buttons). */}
+        {row.status === 'choosing' && !row.choice && optionsOf(row).length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <OptionList row={row} options={optionsOf(row)} compact onPicked={() => onPicked?.(row)} />
+          </div>
+        )}
+        {(v.tone === 'fail' || v.tone === 'ask') && v.msg && (
           <div style={{
             marginTop: 5, fontFamily: 'var(--mono)', fontSize: 9, lineHeight: 1.4,
             color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -122,7 +132,7 @@ function Row({ row, onDelete }) {
 
 export function DownloadTray() {
   const [open, setOpen] = useState(false)
-  const { rows, active, remove } = useDownloads()
+  const { rows, active, remove, reload } = useDownloads()
   const btnRef = useRef(null)
 
   // The tray renders inside the Masthead, which sits inside App's z-index 2
@@ -233,7 +243,7 @@ export function DownloadTray() {
               textTransform: 'uppercase', color: 'var(--muted)', textAlign: 'center',
             }}>Nothing downloading</div>
           ) : (
-            rows.map((r) => <Row key={r.id} row={r} onDelete={remove} />)
+            rows.map((r) => <Row key={r.id} row={r} onDelete={remove} onPicked={reload} />)
           )}
           </div>
         </>,

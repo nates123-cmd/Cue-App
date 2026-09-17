@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
-const ACTIVE = new Set(['pending', 'added', 'downloading'])
+const ACTIVE = new Set(['pending', 'added', 'downloading', 'choosing'])
 const POLL_MS = 10000
 const RECENT_DONE_MS = 24 * 60 * 60 * 1000 // keep finished/failed visible for a day
 
@@ -33,6 +33,38 @@ export function isActive(status) {
   return ACTIVE.has(status)
 }
 
+// The candidate releases the bridge wrote for a "show me options" push. Each is
+// { tok, title, gb, seeders, per_gb, quality, ok, why }. `ok` means it passes
+// every rule; a false `ok` carries the rule it breaks in `why`. Empty until the
+// bridge's search lands (a tick or two after the push).
+export function optionsOf(row) {
+  const o = parseDetail(row?.detail).options
+  return Array.isArray(o) ? o.filter((x) => x && x.tok) : []
+}
+
+// Pick one of those options. The bridge polls for rows with a choice, grabs
+// that exact release and moves the row on to 'added'. Writing the token (not
+// the release) keeps the guid/indexer pair server-side where it belongs.
+export async function chooseOption(rowId, tok) {
+  const { error } = await supabase
+    .from('media_requests')
+    .update({ choice: tok })
+    .eq('id', rowId)
+    .eq('status', 'choosing')
+  if (error) throw error
+}
+
+// One row by id, for the push popup to watch while the bridge searches.
+export async function fetchRequest(rowId) {
+  const { data, error } = await supabase
+    .from('media_requests')
+    .select('id,title,media_type,season,status,detail,choice,requested_at,processed_at')
+    .eq('id', rowId)
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
 // Map a row to a display state for the tray.
 export function statusView(row) {
   const d = parseDetail(row.detail)
@@ -42,6 +74,12 @@ export function statusView(row) {
       return { label: 'Queued', tone: 'wait', pct: null }
     case 'added':
       return { label: 'Searching', tone: 'wait', pct: null }
+    case 'choosing':
+      // "Show me options": the bridge listed the candidates and is waiting on a
+      // pick, here or on Telegram. Nothing downloads until one is chosen.
+      return row.choice
+        ? { label: 'Grabbing…', tone: 'go', pct: null }
+        : { label: 'Pick a copy', tone: 'ask', pct: null, msg: d.choice_error }
     case 'downloading':
       return { label: pct != null ? `Downloading ${pct}%` : 'Downloading', tone: 'go', pct, eta: d.eta }
     case 'downloaded':
@@ -61,7 +99,7 @@ export function statusView(row) {
 // Radarr answers "already in Radarr" so it never gets an arr_id and would sit on
 // "Searching" forever. Collapse duplicates by title+type and keep the row that
 // actually tracks a download (has arr_id, furthest along).
-const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, pending: 1, failed: 0, cancelled: 0 }
+const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, choosing: 2, pending: 1, failed: 0, cancelled: 0 }
 
 function score(row) {
   const d = parseDetail(row.detail)
@@ -98,7 +136,7 @@ export function useDownloads() {
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from('media_requests')
-      .select('id,title,media_type,season,status,detail,requested_at,processed_at')
+      .select('id,title,media_type,season,status,detail,choice,requested_at,processed_at')
       .order('requested_at', { ascending: false })
       .limit(40)
     if (!error && data) {

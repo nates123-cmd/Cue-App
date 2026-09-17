@@ -80,7 +80,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
     setError(null)
     try {
       const res = await onDownload(entry)
-      setDlState(res?.duplicate ? 'duplicate' : 'done')
+      setDlState(res?.cancelled ? 'idle' : res?.duplicate ? 'duplicate' : 'done')
     } catch (e) {
       setDlState('error')
       setError(e?.message || 'Could not send this to the download stack.')
