@@ -332,8 +332,9 @@ export const ItemDetail = ({
     if (pushState === 'pushing' || pushState === 'sent' || !onPushToRadarr) return
     setPushState('pushing')
     try {
-      await onPushToRadarr(item)
-      setPushState('sent')
+      const res = await onPushToRadarr(item)
+      // The movie mode sheet was dismissed without a pick: nothing was sent.
+      setPushState(res?.cancelled ? null : 'sent')
     } catch (e) {
       console.warn('push to radarr failed', e)
       setPushState('error')

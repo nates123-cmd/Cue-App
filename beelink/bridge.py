@@ -381,7 +381,10 @@ def add_movie(req):
                 f"guessed movie (set the tmdb id on the Cue card to force it)")
     movie.update({"qualityProfileId": R_PROFILE, "rootFolderPath": R_ROOT,
                   "monitored": True, "minimumAvailability": "released",
-                  "addOptions": {"searchForMovie": True}})
+                  # When the bridge picks (SPEED_FIRST), Radarr must NOT search on
+                  # add or it grabs its own quality-ranked choice first and we end
+                  # up racing it with two queue rows for one movie.
+                  "addOptions": {"searchForMovie": not SPEED_FIRST}})
     code, resp = arr(RADARR, "POST", "movie", movie)
     if code in (200, 201):
         rid = resp.get("id") if isinstance(resp, dict) else None
@@ -501,8 +504,12 @@ def _monitor_all(series_id):
     return n
 
 
-def _monitor_season(series_id, season, exclusive):
+def _monitor_season(series_id, season, exclusive, search=True):
     """Monitor one season on an existing Sonarr series and search for it.
+
+    `search=False` is for SPEED_FIRST: the bridge is about to pick the releases
+    itself, and letting Sonarr fire a SeasonSearch first means it grabs its own
+    quality-ranked choice and we race it with two grabs per episode.
 
     `exclusive` is for a series we just added (monitor=none): every other season
     is switched off so only the requested one is wanted. For a series already in
@@ -531,6 +538,8 @@ def _monitor_season(series_id, season, exclusive):
     # The season flag above is cosmetic on its own -- the search only wants
     # MONITORED EPISODES, so write those too before asking.
     _monitor_episodes(series_id, [season], exclusive)
+    if not search:
+        return
     # SeasonSearch, not SeriesSearch: ask the indexers for this season only.
     code, resp = arr(SONARR, "POST", "command",
                      {"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": season})
@@ -564,13 +573,13 @@ def add_series(req):
     whole_show = season is None
     series.update({"qualityProfileId": S_PROFILE, "rootFolderPath": S_ROOT,
                    "monitored": True, "seasonFolder": True,
-                   "addOptions": {"searchForMissingEpisodes": whole_show,
+                   "addOptions": {"searchForMissingEpisodes": whole_show and not SPEED_FIRST,
                                   "monitor": "all" if whole_show else "none"}})
     code, resp = arr(SONARR, "POST", "series", series)
     if code in (200, 201):
         rid = resp.get("id") if isinstance(resp, dict) else None
         if season is not None:
-            _monitor_season(rid, season, exclusive=True)
+            _monitor_season(rid, season, exclusive=True, search=not SPEED_FIRST)
             return f"added to Sonarr: {series.get('title')} S{season}", rid
         return f"added to Sonarr: {series.get('title')}", rid
     if code == 400 and "already" in str(resp).lower():
@@ -583,7 +592,7 @@ def add_series(req):
         if season is not None and rid is not None:
             # Already in the library, but this season may never have been asked
             # for -- monitor it and search, so the push does something real.
-            _monitor_season(rid, season, exclusive=False)
+            _monitor_season(rid, season, exclusive=False, search=not SPEED_FIRST)
             return f"already in Sonarr: {series.get('title')} — searching S{season}", rid
         if rid is not None:
             # Whole-show push onto a series already on the shelf. This used to
@@ -1900,10 +1909,70 @@ def process(req):
     mt = req["media_type"]
     if mt == "movie":
         msg, rid = add_movie(req)
-        return "added", msg, {"app": "Radarr", "arr_id": rid}
+        mode = _req_mode(req)
+        d = {"app": "Radarr", "arr_id": rid, "mode": mode}
+        label = req.get("title") or "?"
+        path = f"release?movieId={rid}"
+        if rid and mode == "options":
+            opts = []
+            try:
+                opts = build_options("radarr", RADARR, path, label, req["id"])
+            except Exception as e:
+                log("options search failed, falling back to auto", repr(e))
+            if opts:
+                d["options"] = opts
+                d["choose_since"] = _now_iso()
+                return "choosing", "%s -- %d copies to choose from" % (msg, len(opts)), d
+            # Nothing worth choosing between: behave like auto rather than park
+            # a request on a list with nothing in it.
+            log("options: nothing to offer for %s, taking the auto path" % label)
+            d["mode"] = mode = "auto"
+            d["options_fallback"] = True
+        if rid and mode == "fastest":
+            picked = None
+            try:
+                picked = choose_fastest(RADARR, path, label)
+            except Exception as e:
+                log("fastest failed, falling back to Radarr search", repr(e))
+            if picked is None:
+                arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
+            return "added", msg, d
+        if SPEED_FIRST and rid:
+            picked = None
+            try:
+                picked = choose_release("radarr", RADARR, f"release?movieId={rid}",
+                                        req.get("title") or "?")
+            except Exception as e:
+                log("speed-first failed, falling back to Radarr search", repr(e))
+            if picked == "asked":
+                d["asked_at"] = _now_iso()
+            elif picked is None:
+                # Nothing chosen: hand it back to Radarr rather than leaving the
+                # request with no search running at all.
+                arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
+        return "added", msg, d
     if mt == "tv":
         msg, rid = add_series(req)
-        return "added", msg, {"app": "Sonarr", "arr_id": rid}
+        d = {"app": "Sonarr", "arr_id": rid}
+        if SPEED_FIRST and rid:
+            picked = None
+            try:
+                picked = choose_tv(rid, _req_season(req), req.get("title") or "?")
+            except Exception as e:
+                log("tv speed-first failed, falling back to Sonarr search", repr(e))
+            if picked == "asked":
+                d["asked_at"] = _now_iso()
+            elif picked is None:
+                # Hand it back rather than leaving the request with no search
+                # running at all. Season-scoped if we know the season.
+                sn = _req_season(req)
+                if sn is None:
+                    arr(SONARR, "POST", "command",
+                        {"name": "SeriesSearch", "seriesId": rid})
+                else:
+                    arr(SONARR, "POST", "command",
+                        {"name": "SeasonSearch", "seriesId": rid, "seasonNumber": sn})
+        return "added", msg, d
     if mt == "book":
         msg, extra = add_book(req)
         return "added", msg, {"app": "Prowlarr", **extra}
@@ -1943,6 +2012,32 @@ def _has_file(target, path, arr_id):
         return bool(obj.get("hasFile"))
     st = obj.get("statistics") or {}
     return (st.get("episodeFileCount") or 0) > 0
+
+
+def _is_cancelled(target, mt, arr_id):
+    """Has a human called this request off?
+
+    "Unmonitored, with no file" is the one signal every route agrees on: the
+    Radarr/Sonarr UI, the OpenClaw /cancel verb, and a tap in any *arr client
+    all produce it. Radarr only unmonitors a movie by itself AFTER an import,
+    and then hasFile is true -- so the pair is unambiguous.
+
+    Why this exists: on 2026-09-07 Nate told OpenClaw to stop American Hustle
+    because it was too slow. Nothing in the stack could express that. The only
+    stop verb was media-helper /drop, which defaults research=true, so every
+    "stop" blocklisted a release and immediately grabbed another. Eight grabs,
+    eight failures, then 4,518 indexer searches over 33 hours for a film he had
+    already given up on. A request nobody wants any more has to be able to die.
+    """
+    code, obj = arr(target, "GET", f"{'movie' if mt == 'movie' else 'series'}/{arr_id}")
+    if code != 200 or not isinstance(obj, dict):
+        return False
+    if obj.get("monitored"):
+        return False
+    if mt == "movie":
+        return not obj.get("hasFile")
+    st = obj.get("statistics") or {}
+    return (st.get("episodeFileCount") or 0) == 0
 
 
 def _tv_progress(target, arr_id, season=None):
@@ -2054,18 +2149,81 @@ def monitor_downloads():
         # Nothing queued and nothing on disk = the search found nothing it would
         # take. Give it a grace period (indexers and RSS are not instant), then
         # say so rather than leaving the row at "searching" indefinitely.
+        if rec is None and new_status not in ("downloaded", "failed") \
+                and _is_cancelled(target, mt, arr_id):
+            # Called off. Leave the arr alone (it is already unmonitored) and
+            # drop the row out of status in.(added,downloading) so the reaper,
+            # the escalator and the offer machinery all stop seeing it.
+            #
+            # "cancelled" is a real status as of the 2026-09-08 constraint
+            # widening; before that this had to write "failed", which claimed
+            # the stack had lost when in fact nobody wanted the title any more.
+            # Cue reads it as "Stopped" and lets the title be requested again.
+            d["outcome"] = "cancelled"
+            d["cancelled_at"] = _now_iso()
+            code, resp = sb("PATCH", f"media_requests?id=eq.{r['id']}",
+                            {"status": "cancelled", "detail": json.dumps(d)},
+                            prefer="return=minimal")
+            if code not in (200, 204):
+                # Swallowing this is how the first cut of this branch "worked":
+                # it logged a cancel, the PATCH 400'd on the check constraint,
+                # the row stayed active, and the escalator kept going. A write
+                # that decides whether a loop terminates must never fail quietly.
+                log(f"cancel PATCH failed {code} for '{r.get('title')}': {str(resp)[:180]}")
+                continue
+            log(f"cancelled {mt} '{r.get('title')}': unmonitored with no file")
+            tg(f"Stopped looking for {r.get('title')}.", key=f"cancelled:{arr_id}")
+            continue
+        if rec is None and d.get("asked_at") and _age_secs(d["asked_at"]) > ASK_GRACE:
+            # He was offered a choice and did not tap. A request must never sit
+            # parked on a decision -- speed is the whole point -- so take the
+            # safe in-rules copy and tell him that is what happened.
+            if mt == "movie":
+                try:
+                    code, rels = arr(target, "GET", "release?movieId=%s" % arr_id)
+                    ok, _ = _speed_split(rels if isinstance(rels, list) else [])
+                except Exception as e:
+                    log("ask-timeout re-search failed", repr(e))
+                    ok = []
+                if ok and _force_grab(target, ok[0],
+                                      "no tap in %dm, took the safe one" % (ASK_GRACE // 60)):
+                    tg("No pick for %s, so I took the in-rules copy: %s"
+                       % (r.get("title"), _describe(ok[0])), key="asktimeout:%s" % arr_id)
+            else:
+                # TV is only ever ASKED about when nothing passed the rules for
+                # the whole season, so there is no "safe copy" waiting to be
+                # taken. Hand it back to Sonarr rather than inventing one --
+                # `release?seriesId=` without a seasonNumber is not a valid
+                # search and would 400 every time this fired.
+                season = r.get("season")
+                if season is None:
+                    arr(SONARR, "POST", "command", {"name": "SeriesSearch", "seriesId": arr_id})
+                else:
+                    arr(SONARR, "POST", "command",
+                        {"name": "SeasonSearch", "seriesId": arr_id, "seasonNumber": season})
+                log("no tap in %dm for %s, handed back to Sonarr"
+                    % (ASK_GRACE // 60, r.get("title")))
+            d.pop("asked_at", None)
+            changed = True
         if rec is None and new_status not in ("downloaded", "failed"):
             since = d.get("stuck_since")
             if not since:
                 d["stuck_since"] = _now_iso()
                 changed = True
-            elif _age_secs(since) > ESCALATE_GRACE:
+            elif _escalate_due(d):
                 try:
-                    if escalate_stuck(r, mt, arr_id):
-                        d["escalated_at"] = _now_iso()
-                        changed = True
+                    escalate_stuck(r, mt, arr_id)
                 except Exception as e:
                     log("escalate failed", r.get("title"), repr(e))
+                # Stamp the ATTEMPT, not the send. escalate_stuck returns the
+                # result of tg(), which goes False the moment the 24h dedupe key
+                # bites -- so keying off it meant escalated_at never got set and
+                # this branch re-ran on every 20s poll. Each run fires a LIVE
+                # indexer search: 4,518 of them for one 2013 movie across
+                # 2026-09-07/08, all for a title Nate had already given up on.
+                d["escalated_at"] = _now_iso()
+                d["escalate_n"] = int(d.get("escalate_n") or 0) + 1
+                changed = True
         elif d.pop("stuck_since", None) is not None:
             d.pop("escalated_at", None)
             changed = True
@@ -2133,9 +2291,27 @@ def _is_dead(rec, qt):
       queuedDL at 0% -> waiting on a slot, but only dead if the swarm is empty
       stalledDL      -> already covered by the message, kept for the no-message case
     NordVPN gives no forwarded port, so we only ever reach peers with open
-    ports; a swarm reporting zero seeders will never start. Judge on
-    num_complete (seeders the tracker knows) rather than num_seeds
-    (seeders we happen to be connected to), which is 0 while queued.
+    ports; a swarm reporting zero seeders will never start.
+
+    But num_complete is only MEANINGFUL once the torrent has announced to a
+    tracker, and that has not happened in two of these three states:
+
+      queuedDL  qBittorrent has not started it at all (queueing is on,
+                max_active_downloads=6). No announce, so num_complete is 0
+                because nothing was ever asked. Reaping here punishes a torrent
+                for waiting its turn -- and the wait is usually caused by dead
+                torrents holding the slots, so reaping the QUEUED one is exactly
+                backwards.
+      metaDL    magnet with no metadata yet, so no tracker list to announce to.
+                Same false zero. It gets META_GRACE and is judged on nothing
+                else.
+      stalledDL running, announced, and the tracker says nobody has the file.
+                Here a zero is real.
+
+    2026-09-08: 67 of the last 81 reaps were "queuedDL with an empty swarm" and
+    8 more were metaDL. 75 of 81 drops rested on a number that cannot mean what
+    the old code read it to mean. That is the "it stalls and drops downloads all
+    the time" complaint, and Gone Baby Gone's first grab died this way at 5m48s.
     """
     msg = (rec.get("errorMessage") or "").lower()
     if "stall" in msg or "no connection" in msg:
@@ -2147,11 +2323,14 @@ def _is_dead(rec, qt):
     swarm = qt.get("num_complete")
     if swarm is None:
         swarm = -1
-    if state in ("metaDL", "queuedDL", "stalledDL") and progress <= 0:
-        if swarm == 0:
-            return f"{state} with an empty swarm", DEAD_GRACE
-        if state == "metaDL":
-            return "metadata never arrived", META_GRACE
+    if progress > 0:
+        return None, 0                       # it is moving; never our business
+    if state == "queuedDL":
+        return None, 0                       # not started -> nothing to judge
+    if state == "metaDL":
+        return "metadata never arrived", META_GRACE
+    if state == "stalledDL" and swarm == 0:
+        return "stalled with an empty swarm", DEAD_GRACE
     return None, 0
 
 
@@ -2182,7 +2361,10 @@ def _pick_replacement(rels):
         waived = bool(ok)
     if not ok:
         return None, False
-    best = max(ok, key=lambda x: (x.get("seeders") or 0))
+    # Rank by seeders-per-GB, not raw seeders: a 40-seeder 26 GB remux is a
+    # worse replacement than a 6-seeder 5 GB WEB-DL, and picking the corpse's
+    # successor on raw count is how a "healthy" replacement still takes a day.
+    best = max(ok, key=_speed_key)
     if (best.get("seeders") or 0) <= 0:
         return None, False
     return best, waived
@@ -2224,6 +2406,486 @@ def _grab_best_seeded(app_name, target, rec):
         why = " -- waived: %s" % "; ".join(best.get("rejections") or [])[:70]
     return "%s (%s seeders)%s" % ((best.get("title") or "?")[:40],
                                   best.get("seeders"), why)
+
+
+# ---------------------------------------------------------------------------
+# Speed-first selection
+#
+# Radarr and Sonarr rank quality tier -> custom-format score -> indexer
+# priority. Seeders are a MINIMUM only, never a sort key, and no setting
+# changes that: it has been an open feature request for years (Radarr #7667,
+# #9928). So the app cannot be configured into picking the way Nate picks.
+#
+# Nate picks the way a person actually picks: the most seeders for the least
+# size, because that is what predicts "on the TV tonight". So the bridge does
+# the choosing, and the app is demoted to what it is genuinely good at --
+# matching, renaming, hardlinking and telling Jellyfin.
+#
+# The app's size floor (1080p min lowered 15 -> 8 MB/min on 2026-09-08) stops
+# being a ban and becomes the ASK-ME LINE:
+#     above it -> approved -> grab the fastest, silently
+#     below it -> soft-rejected -> offer it, Nate taps to accept the tradeoff
+# The default therefore never lands him with a mushy file, but the fast option
+# is one tap away instead of invisible. Before this, a 75-seeder 1.6 GB copy of
+# Gone Baby Gone was rejected outright while a 4-seeder 5.5 GB copy crawled at a
+# 22-hour ETA; the rejected one later imported in 21 minutes.
+# ---------------------------------------------------------------------------
+
+SPEED_FIRST = os.environ.get("SPEED_FIRST", "1") not in ("0", "false", "no")
+ASK_MULTIPLE = float(os.environ.get("ASK_MULTIPLE", "1.5"))   # how much faster the
+                                                              # below-floor option must
+                                                              # be before interrupting
+ASK_GRACE = int(os.environ.get("ASK_GRACE", "1200"))          # secs to wait for a tap
+                                                              # before taking the safe one
+
+# The Cue push popup (2026-09-17) lets Nate say per push how the file gets
+# picked: auto (the speed-first flow above), fastest (rules waived, no asking)
+# or options (list the best few, grab nothing until he taps one in Cue or on
+# Telegram). The mode rides in the JSON Cue packs into `detail` on insert.
+CHOOSE_GRACE = int(os.environ.get("CHOOSE_GRACE", "86400"))   # secs an "options" row may wait for a pick
+MAX_CHOICES  = int(os.environ.get("MAX_CHOICES", "6"))        # rows in the options list
+
+PUSH_MODES = ("auto", "fastest", "options")
+
+
+def _req_mode(req):
+    """auto | fastest | options. Anything unparseable or unknown is auto."""
+    try:
+        d = json.loads(req.get("detail") or "{}")
+    except Exception:
+        return "auto"
+    m = d.get("mode") if isinstance(d, dict) else None
+    return m if m in PUSH_MODES else "auto"
+
+
+def _per_gb(rel):
+    """Seeders per gigabyte -- the number Nate judges on.
+
+    30 seeders on a 26 GB remux is a worse bet than 6 on a 5 GB WEB-DL, and raw
+    seeder count hides that. Indexer counts are also inflated (Gone Baby Gone
+    advertised 75 seeders; the real swarm was 15), so this is for RANKING only.
+    Never present the absolute number as truth.
+    """
+    gb = (rel.get("size") or 0) / 1e9
+    return ((rel.get("seeders") or 0) / gb) if gb > 0 else 0.0
+
+
+def _speed_key(rel):
+    """Sort key: seeders per GB, then raw seeders.
+
+    The tiebreak is not cosmetic. Some indexers return releases with no `size`,
+    and `_per_gb` is 0 for all of those -- without a second term the "fastest"
+    pick among them collapses to whichever happened to be first in the list.
+    Falling back to seeders means an unsized release is still ranked sanely.
+    """
+    return (_per_gb(rel), rel.get("seeders") or 0)
+
+
+def _norm_title(t):
+    """Collapse a release title for duplicate detection across indexers."""
+    return re.sub(r"[^a-z0-9]+", "", (t or "").lower())
+
+
+def _grabbable(rel):
+    return bool(rel.get("guid")) and rel.get("indexerId") is not None
+
+
+def _speed_split(rels):
+    """(approved fastest-first, below-the-line fastest-first)."""
+    ok = sorted([r for r in rels if r.get("approved") and _grabbable(r)],
+                key=_speed_key, reverse=True)
+    below = sorted([r for r in rels if not r.get("approved") and _offerable(r)],
+                   key=_speed_key, reverse=True)
+    return ok, below
+
+
+def _describe(rel):
+    return "%.1f GB, %s seeders, %.0f seed/GB" % (
+        (rel.get("size") or 0) / 1e9, rel.get("seeders") or 0, _per_gb(rel))
+
+
+def _force_grab(target, rel, why):
+    """Grab one exact release through the manual endpoint, bypassing ranking."""
+    code, _ = arr(target, "POST", "release",
+                  {"guid": rel["guid"], "indexerId": rel["indexerId"]})
+    if code not in (200, 201, 202):
+        log("speed-first grab failed %s: %s" % (code, (rel.get("title") or "?")[:55]))
+        return False
+    log("speed-first %s: %s (%s)" % (why, (rel.get("title") or "?")[:50], _describe(rel)))
+    return True
+
+
+def choose_release(app_name, target, path, label):
+    """Grab the fastest acceptable release, or ask when speed costs quality.
+
+    Returns "grabbed", "asked", or None. None means "fall back to the app's own
+    search" -- that fallback must always stay, because a bug in here must never
+    mean nothing gets downloaded at all.
+    """
+    code, rels = arr(target, "GET", path)
+    if code != 200 or not isinstance(rels, list) or not rels:
+        return None
+    ok, below = _speed_split(rels)
+    best = ok[0] if ok else None
+    fast = below[0] if below else None
+
+    # Only interrupt him when the tradeoff is REAL: the below-the-line option
+    # has to be meaningfully faster, not faster by a rounding error.
+    worth_asking = fast is not None and (
+        best is None or _per_gb(fast) > _per_gb(best) * ASK_MULTIPLE)
+
+    if best is not None and not worth_asking:
+        return "grabbed" if _force_grab(target, best, "grabbed for %s" % label) else None
+    if worth_asking:
+        return "asked" if _ask_which(app_name, target, path, label, best, below) else None
+    return None
+
+
+def _ask_which(app_name, target, path, label, best, below):
+    """Push the real choice to Telegram as tap-to-grab buttons.
+
+    `best` (if any) is listed first so "just take the good one" is always
+    available; the rest are the faster copies that sit under the size floor.
+    """
+    cands = ([best] if best is not None else [])
+    # The same release comes back from several indexers. Offering it twice
+    # burns a button on a choice that is not a choice -- the dry run on
+    # Untold S06 offered the identical 720p file as options 1 and 2.
+    seen = {_norm_title(r.get("title")) for r in cands}
+    for r in below:
+        if r is best:
+            continue
+        k = _norm_title(r.get("title"))
+        if k in seen:
+            continue
+        seen.add(k)
+        cands.append(r)
+        if len(cands) >= MAX_OFFERS:
+            break
+    lines = ["%s: the fastest copy costs some quality." % label, ""]
+    buttons = []
+    for i, r in enumerate(cands, 1):
+        # Say the REAL reason. A hardcoded "under the size floor" was wrong for
+        # every release rejected for being too LARGE or out of profile, which is
+        # most of them -- it told Nate the opposite of the truth.
+        tag = ("within your rules" if r is best
+               else "; ".join(str(x) for x in (r.get("rejections") or []))[:70]
+               or "outside your rules")
+        lines.append("%d. %s" % (i, (r.get("title") or "?")[:62]))
+        lines.append("   %s  -- %s" % (_describe(r), tag))
+        lbl, url = _offer(app_name, r, path)
+        buttons.append(("%d. %s" % (i, lbl), url))
+    if best is not None:
+        lines += ["", "No tap within %d min and I take #1." % (ASK_GRACE // 60)]
+    else:
+        lines += ["", "Nothing here passes your rules, so nothing downloads until you tap."]
+    _offers_save()
+    log("asked which release for %s: %d options" % (label, len(cands)))
+    return tg("\n".join(lines), key="choose:%s:%s" % (app_name, label),
+              buttons=buttons, repeat=ESCALATE_REPEAT)
+
+
+def choose_fastest(target, path, label):
+    """Cue's "Fastest": the most seeders per GB, soft rules waived, nobody asked.
+
+    The line between waivable and wrong is still `_offerable`: a release that is
+    the wrong movie, blocklisted, Cyrillic, under 720p or in a thin swarm never
+    qualifies however fast it looks. Returns "grabbed" or None (= fall back to
+    Radarr's own search).
+    """
+    code, rels = arr(target, "GET", path)
+    if code != 200 or not isinstance(rels, list) or not rels:
+        return None
+    ok, below = _speed_split(rels)
+    cands = sorted(ok + below, key=_speed_key, reverse=True)
+    if not cands:
+        return None
+    best = cands[0]
+    why = "fastest for %s" % label
+    if not best.get("approved"):
+        why += " -- waived: %s" % "; ".join(str(x) for x in (best.get("rejections") or []))[:70]
+    return "grabbed" if _force_grab(target, best, why) else None
+
+
+def _option_dict(tok, rel, app_name, search_path):
+    """What Cue renders for one candidate, plus enough to grab it on its own
+    if offers.json ever loses the token."""
+    q = ((rel.get("quality") or {}).get("quality") or {}).get("name")
+    return {"tok": tok, "title": (rel.get("title") or "?")[:120],
+            "gb": round((rel.get("size") or 0) / 1e9, 2),
+            "seeders": rel.get("seeders") or 0,
+            "per_gb": round(_per_gb(rel), 1),
+            "quality": q, "indexer": rel.get("indexer"),
+            "ok": bool(rel.get("approved")),
+            "why": "" if rel.get("approved")
+                   else ("; ".join(str(x) for x in (rel.get("rejections") or []))[:90]
+                         or "outside your rules"),
+            "guid": rel.get("guid"), "indexerId": rel.get("indexerId"),
+            "app": app_name, "search": search_path}
+
+
+def pick_options(rels):
+    """The candidates worth listing: in-rules copies first (fastest-first), then
+    the fastest copies that only trip a soft rule, deduped across indexers,
+    capped at MAX_CHOICES. Pure, so test_offer.py can pin it."""
+    ok, below = _speed_split(rels)
+    cands, seen = [], set()
+    for r in ok + below:
+        k = _norm_title(r.get("title"))
+        if k in seen:
+            continue
+        seen.add(k)
+        cands.append(r)
+        if len(cands) >= MAX_CHOICES:
+            break
+    return cands
+
+
+def build_options(app_name, target, path, label, req_id):
+    """Cue's "Show me options": list the best few, grab nothing.
+
+    Every entry gets an offer token so the same list is tappable from Cue
+    (writes `choice`) and from a Telegram button (hits the grab server); both
+    paths end in _settle_choice. Returns the option dicts written onto the
+    row, [] if there was nothing to choose between.
+    """
+    code, rels = arr(target, "GET", path)
+    if code != 200 or not isinstance(rels, list) or not rels:
+        return []
+    cands = pick_options(rels)
+    if not cands:
+        return []
+    opts, buttons = [], []
+    lines = ["%s: pick a copy." % label, ""]
+    for i, r in enumerate(cands, 1):
+        tok = _offer_token(app_name, r, path, req_id=req_id)
+        opts.append(_option_dict(tok, r, app_name, path))
+        tag = ("within your rules" if r.get("approved")
+               else "; ".join(str(x) for x in (r.get("rejections") or []))[:70]
+               or "outside your rules")
+        lines.append("%d. %s" % (i, (r.get("title") or "?")[:62]))
+        lines.append("   %s  -- %s" % (_describe(r), tag))
+        buttons.append(("%d. %s" % (i, _offer_label(r)), _offer_url(tok)))
+    lines += ["", "Tap one here or in Cue. Nothing downloads until you do; after %dh "
+                  "I take the fastest in-rules copy." % (CHOOSE_GRACE // 3600)]
+    _offers_save()
+    log("options for %s: %d candidates" % (label, len(opts)))
+    tg("\n".join(lines), key="options:%s:%s" % (app_name, req_id),
+       buttons=buttons, repeat=ESCALATE_REPEAT)
+    return opts
+
+
+# --- TV -------------------------------------------------------------------
+#
+# Movies are one list and one grab. TV is not: a season search returns season
+# PACKS and individual episodes mixed together, and the request may be one
+# season or a whole run.
+#
+# The saving grace is that Sonarr tags every release with `fullSeason` and
+# `mappedEpisodeNumbers`, so ONE season search covers every episode in it. Doing
+# this per episode would fire an indexer search per episode, which is how the
+# 4,518-search runaway started.
+
+
+def _wanted_episodes(series_id, season=None):
+    """(season, episode, id) for monitored, aired, file-less episodes."""
+    code, eps = arr(SONARR, "GET", "episode?seriesId=%s" % series_id)
+    if code != 200 or not isinstance(eps, list):
+        return []
+    now = datetime.now(timezone.utc)
+    out = []
+    for e in eps:
+        if not e.get("monitored") or e.get("hasFile"):
+            continue
+        sn = e.get("seasonNumber") or 0
+        if sn < 1 or (season is not None and sn != int(season)):
+            continue
+        air = e.get("airDateUtc")
+        if not air:
+            continue                       # never aired: nothing to look for
+        try:
+            if datetime.fromisoformat(air.replace("Z", "+00:00")) > now:
+                continue                   # future episode, not missing yet
+        except Exception:
+            pass
+        out.append((sn, e.get("episodeNumber"), e.get("id")))
+    return sorted(out)
+
+
+def _season_plan(rels, wanted_nums):
+    """(best full-season pack, {episode number -> fastest single release}).
+
+    Multi-episode files are skipped: they are neither a clean per-episode pick
+    nor a full season, and treating one as either double-grabs episodes.
+    """
+    packs = sorted([r for r in rels if r.get("fullSeason")
+                    and r.get("approved") and _grabbable(r)],
+                   key=_speed_key, reverse=True)
+    singles = {}
+    for r in rels:
+        if r.get("fullSeason") or not r.get("approved") or not _grabbable(r):
+            continue
+        nums = r.get("mappedEpisodeNumbers") or r.get("episodeNumbers") or []
+        if len(nums) != 1 or nums[0] not in wanted_nums:
+            continue
+        cur = singles.get(nums[0])
+        if cur is None or _speed_key(r) > _speed_key(cur):
+            singles[nums[0]] = r
+    return (packs[0] if packs else None), singles
+
+
+def _choose_one_season(series_id, season, wanted, label):
+    """Grab a whole season the fastest way available. Returns "grabbed"/"asked"/None."""
+    nums = {n for _, n, _ in wanted}
+    code, rels = arr(SONARR, "GET",
+                     "release?seriesId=%s&seasonNumber=%s" % (series_id, season))
+    if code != 200 or not isinstance(rels, list) or not rels:
+        return None
+    pack, singles = _season_plan(rels, nums)
+
+    # A season is only finished when its SLOWEST episode is, so a per-episode
+    # plan is judged on its worst link rather than its average.
+    plan_speed = min((_per_gb(r) for r in singles.values()), default=0.0)
+    complete = bool(singles) and set(singles) >= nums
+
+    if complete and (pack is None or _per_gb(pack) <= plan_speed * ASK_MULTIPLE):
+        # Individual episodes also mean E01 starts now instead of after the
+        # whole pack lands, which is the thing Nate is actually optimising for.
+        got = sum(1 for n in sorted(singles)
+                  if _force_grab(SONARR, singles[n],
+                                 "grabbed %s S%02dE%02d" % (label, season, n)))
+        return "grabbed" if got else None
+    if pack is not None:
+        return "grabbed" if _force_grab(
+            SONARR, pack, "grabbed %s S%02d season pack" % (label, season)) else None
+    if singles:
+        got = sum(1 for n in sorted(singles)
+                  if _force_grab(SONARR, singles[n],
+                                 "grabbed %s S%02dE%02d" % (label, season, n)))
+        if got:
+            missing = sorted(nums - set(singles))
+            log("%s S%02d: %d episode(s) with no in-rules release: %s"
+                % (label, season, len(missing), missing))
+            return "grabbed"
+        return None
+
+    # Nothing passes the rules for this season at all. Offer the fastest
+    # below-the-line options once, rather than per episode.
+    below = sorted([r for r in rels if not r.get("approved") and _offerable(r)],
+                   key=_speed_key, reverse=True)
+    if below:
+        return "asked" if _ask_which("sonarr", SONARR,
+                                     "release?seriesId=%s&seasonNumber=%s" % (series_id, season),
+                                     "%s S%02d" % (label, season), None, below) else None
+    return None
+
+
+def choose_tv(series_id, season, label):
+    """Speed-first selection for a season, or for every season of a whole-show push."""
+    wanted = _wanted_episodes(series_id, season)
+    if not wanted:
+        return None
+    seasons = {}
+    for sn, n, eid in wanted:
+        seasons.setdefault(sn, []).append((sn, n, eid))
+    results = []
+    for sn in sorted(seasons):
+        try:
+            results.append(_choose_one_season(series_id, sn, seasons[sn], label))
+        except Exception as e:
+            log("tv speed-first failed on S%02d" % sn, repr(e))
+            results.append(None)
+    if "grabbed" in results:
+        return "grabbed"
+    if "asked" in results:
+        return "asked"
+    return None
+
+
+# --- let episode 1 land first ----------------------------------------------
+#
+# Grabbing a season starts every episode at once, so N episodes share one line
+# and all finish at roughly the same late moment. Nate cannot start watching
+# until nearly the whole season is done, which defeats the point of optimising
+# for speed at all. Holding the later ones back lets the earliest episode land
+# in a fraction of the time, and the rest follow behind it.
+#
+# LANDMINE: qBittorrent 5.x RENAMED pause/resume to stop/start.
+# `torrents/pause` 404s on 5.2.2 (webapi 2.15.1) -- silently, if you do not
+# check the code. A stopped torrent reports state `stoppedDL`, which `_is_dead`
+# does not consider, so the reaper cannot mistake a deliberately held episode
+# for a corpse.
+
+FIRST_EP_FIRST = os.environ.get("FIRST_EP_FIRST", "1") not in ("0", "false", "no")
+FIRST_EP_MAX = int(os.environ.get("FIRST_EP_MAX", "5400"))   # never hold one back longer
+
+_held = {}          # torrent hash -> when we stopped it
+
+
+def prioritise_first_episodes():
+    """Run the earliest incomplete episode of a season alone; release the rest after.
+
+    Idempotent and re-evaluated every poll: it only ever stops torrents that are
+    behind the current leader, and always starts them again once the leader is
+    done, is gone, or has been holding things up for FIRST_EP_MAX.
+    """
+    if not FIRST_EP_FIRST:
+        return
+    code, q = arr(SONARR, "GET", "queue?pageSize=200&includeEpisode=true")
+    if code != 200 or not isinstance(q, dict):
+        return
+    try:
+        tor = _qbit_by_hash()
+    except Exception as e:
+        log("qbit info error (first-episode)", repr(e))
+        return
+    now = time.time()
+    groups = {}
+    for r in q.get("records", []):
+        ep = r.get("episode") or {}
+        n = ep.get("episodeNumber")
+        h = (r.get("downloadId") or "").lower()
+        if n is None or h not in tor:
+            continue
+        groups.setdefault((r.get("seriesId"), ep.get("seasonNumber")), []).append((n, h))
+
+    for (sid, season), items in groups.items():
+        if len(items) < 2:
+            continue                       # a season pack, or a single episode
+        items.sort()
+        leader = next(((n, h) for n, h in items if (tor[h].get("progress") or 0) < 1), None)
+        held = [h for _, h in items if h in _held]
+
+        # Let everything go when the leader has landed, or when we have been
+        # holding the rest long enough that the wait is worse than the wait.
+        if leader is None or any(now - _held.get(h, now) > FIRST_EP_MAX for h in held):
+            if held:
+                qbit("torrents/start", {"hashes": "|".join(held)})
+                for h in held:
+                    _held.pop(h, None)
+                log("first-episode hold released on series %s S%s (%d torrents)"
+                    % (sid, season, len(held)))
+            continue
+
+        leader_n, leader_h = leader
+        # The new leader is usually one WE stopped: when E01 finishes, E02 is
+        # promoted while still held. Without starting it here the season
+        # deadlocks until FIRST_EP_MAX and nothing downloads at all.
+        if leader_h in _held or (tor[leader_h].get("state") or "").startswith("stopped"):
+            qbit("torrents/start", {"hashes": leader_h})
+            _held.pop(leader_h, None)
+            log("first-episode: S%02dE%02d promoted, starting it" % (season or 0, leader_n))
+        stop = [h for n, h in items
+                if h != leader_h
+                and (tor[h].get("progress") or 0) < 1
+                and not (tor[h].get("state") or "").startswith("stopped")]
+        if stop:
+            qbit("torrents/stop", {"hashes": "|".join(stop)})
+            for h in stop:
+                _held[h] = now
+            qbit("torrents/topPrio", {"hashes": leader_h})
+            log("holding %d later episode(s) so S%02dE%02d lands first"
+                % (len(stop), season or 0, leader_n))
 
 
 def reap_stalled(app_name, target, search_cmd, id_field):
@@ -2301,6 +2963,28 @@ OFFERS_PATH = os.environ.get("OFFERS_PATH",
                              os.path.join(os.path.dirname(os.path.abspath(__file__)), "offers.json"))
 ESCALATE_GRACE  = int(os.environ.get("ESCALATE_GRACE", "1800"))    # stuck this long before paging
 ESCALATE_REPEAT = int(os.environ.get("ESCALATE_REPEAT", "86400"))  # don't re-ask about a title for a day
+# 30m, 2h, 6h, then once a day. Every escalation costs a live indexer search
+# across every configured indexer, so the ladder must get steep fast.
+ESCALATE_BACKOFF = (1800, 7200, 21600, 86400)
+
+
+def _escalate_due(d):
+    """Is this stuck request due for another look?
+
+    First look after ESCALATE_GRACE, then the backoff ladder. Anything that
+    keeps this returning True on consecutive polls burns an indexer search
+    every 20 seconds, so it is deliberately conservative.
+    """
+    since = d.get("stuck_since")
+    if not since:
+        return False
+    last = d.get("escalated_at")
+    if not last:
+        return _age_secs(since) > ESCALATE_GRACE
+    # escalate_n counts escalations ALREADY DONE, so the gap after the first is
+    # BACKOFF[0]. Indexing by n straight would skip the 30m rung entirely.
+    n = max(int(d.get("escalate_n") or 0) - 1, 0)
+    return _age_secs(last) > ESCALATE_BACKOFF[min(n, len(ESCALATE_BACKOFF) - 1)]
 OFFER_TTL       = int(os.environ.get("OFFER_TTL", str(14 * 86400)))
 MIN_OFFER_SEEDERS = int(os.environ.get("MIN_OFFER_SEEDERS", "5"))
 MAX_OFFERS      = int(os.environ.get("MAX_OFFERS", "3"))
@@ -2323,12 +3007,43 @@ def _offers_load():
     except Exception:
         _offers = {}
     _offers_expire()
+    _offers_compact()
 
 
 def _offers_expire():
     now = time.time()
     for tok in [t for t, o in _offers.items() if now - o.get("made", 0) > OFFER_TTL]:
         _offers.pop(tok, None)
+
+
+def _offers_compact():
+    """Collapse duplicate offers for the same release; newest token wins.
+
+    Repairs a file already bloated by the pre-2026-09-08 _offer(), which minted
+    a fresh token on every poll of a stuck title: offers.json reached 11,963
+    rows holding 6 distinct releases. A grabbed row always beats an ungrabbed
+    one, so a button Nate already tapped cannot come back as a live offer.
+
+    Dropped tokens make the buttons in older Telegram messages read "Link
+    expired", which is honest -- those messages were duplicates of each other.
+    """
+    best = {}
+    for tok, o in _offers.items():
+        k = (o.get("app"), o.get("guid"))
+        cur = best.get(k)
+        if cur is None:
+            best[k] = tok
+            continue
+        a, b = _offers[cur], o
+        if (bool(b.get("grabbed")), b.get("made", 0)) > (bool(a.get("grabbed")), a.get("made", 0)):
+            best[k] = tok
+    keep = set(best.values())
+    dropped = len(_offers) - len(keep)
+    if dropped:
+        for tok in [t for t in _offers if t not in keep]:
+            _offers.pop(tok, None)
+        log(f"offers compacted: dropped {dropped} duplicate rows, {len(_offers)} left")
+        _offers_save()
 
 
 def _offers_save():
@@ -2358,24 +3073,200 @@ def _offerable(rel):
     return rel.get("guid") and rel.get("indexerId") is not None
 
 
-def _offer(app_name, rel, search_path):
-    """Register one release as tappable and return (label, url).
+def _offer_token(app_name, rel, search_path, req_id=None):
+    """Register one release as tappable and return its token.
 
     `search_path` is stored so a tap can rebuild the release cache -- a guid is
     only grabbable while the app still holds that search result, and these
     buttons are meant to survive until Nate reads his phone.
+
+    One token per (app, guid). Minting a fresh one per call looked harmless
+    because tg() dedupes the MESSAGE anyway -- but the row is written before
+    that check ever runs, so a stuck title grew the file on every poll forever.
+    Reusing the token also keeps an offer Nate already tapped from quietly
+    reappearing as a fresh, ungrabbed one.
+
+    `req_id` ties the offer to a media_requests row parked on 'choosing', so a
+    tap moves that row on (see _settle_choice).
     """
     import secrets
+    guid = rel["guid"]
+    for t, o in _offers.items():
+        if o.get("app") == app_name and o.get("guid") == guid and not o.get("grabbed"):
+            o["search"] = search_path              # keep the cache-rebuild path fresh
+            o["seeders"] = rel.get("seeders") or 0
+            o["made"] = time.time()                # a still-live offer should not age out
+            if req_id:
+                o["req_id"] = req_id
+            return t
     tok = secrets.token_urlsafe(12)
-    _offers[tok] = {"app": app_name, "guid": rel["guid"], "indexerId": rel["indexerId"],
+    _offers[tok] = {"app": app_name, "guid": guid, "indexerId": rel["indexerId"],
                     "title": (rel.get("title") or "?")[:120],
                     "seeders": rel.get("seeders") or 0,
                     "why": "; ".join(rel.get("rejections") or [])[:200],
                     "search": search_path,
                     "made": time.time(), "grabbed": False}
+    if req_id:
+        _offers[tok]["req_id"] = req_id
+    return tok
+
+
+def _offer_label(rel):
     gb = (rel.get("size") or 0) / 1e9
-    return (f"Grab {gb:.1f} GB / {rel.get('seeders') or 0} seeders",
-            f"{GRAB_BASE}/grab?t={tok}")
+    return f"Grab {gb:.1f} GB / {rel.get('seeders') or 0} seeders"
+
+
+def _offer_url(tok):
+    return f"{GRAB_BASE}/grab?t={tok}"
+
+
+def _offer(app_name, rel, search_path, req_id=None):
+    """Register one release as tappable and return (label, url)."""
+    tok = _offer_token(app_name, rel, search_path, req_id=req_id)
+    return _offer_label(rel), _offer_url(tok)
+
+
+def _grab_offer(o):
+    """POST the manual grab for one offer, surviving a release-cache miss.
+
+    The guid outlives the app's release cache (it holds only the last search),
+    so on "cache" re-run the stored search to repopulate it and try once more
+    -- otherwise every button goes dead within the hour. Returns (code, resp).
+    """
+    target = RADARR if o["app"] == "radarr" else SONARR
+    body = {"guid": o["guid"], "indexerId": o["indexerId"]}
+    code, resp = arr(target, "POST", "release", body)
+    if code not in (200, 201, 202) and "cache" in str(resp).lower() and o.get("search"):
+        log("grab: release cache miss, re-searching")
+        arr(target, "GET", o["search"])
+        code, resp = arr(target, "POST", "release", body)
+    return code, resp
+
+
+def _detail_dict(row):
+    try:
+        d = json.loads(row.get("detail") or "{}")
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _settle_choice(o, via):
+    """A grab went through for this offer: mark it, and move its request row on.
+
+    The row is only touched while it still reads 'choosing' -- a tap on an old
+    Telegram message for a request that has since moved on must not drag it
+    back. Cue's own pick and the Telegram button both land here, so whichever
+    comes second finds the row already settled and does nothing.
+    """
+    o["grabbed"] = True
+    _offers_save()
+    rid = o.get("req_id")
+    if not rid:
+        return
+    code, rows = sb("GET", f"media_requests?id=eq.{rid}&select=id,status,detail")
+    if code != 200 or not rows:
+        return
+    r = rows[0]
+    if r.get("status") != "choosing":
+        return
+    d = _detail_dict(r)
+    for k in ("options", "choose_since", "choice_error"):
+        d.pop(k, None)
+    d["chosen"] = o["title"]
+    d["chosen_via"] = via
+    d["msg"] = "grabbing your pick: %s" % o["title"][:60]
+    code, resp = sb("PATCH", f"media_requests?id=eq.{rid}",
+                    {"status": "added", "detail": json.dumps(d)}, prefer="return=minimal")
+    if code not in (200, 204):
+        log(f"settle PATCH failed {code} for request {rid}: {str(resp)[:180]}")
+
+
+def process_choices():
+    """Cue wrote a pick onto a 'choosing' row: grab exactly that release."""
+    code, rows = sb("GET", "media_requests?status=eq.choosing&choice=not.is.null"
+                           "&select=id,title,detail,choice&limit=20")
+    if code != 200 or not rows:
+        return
+    for r in rows:
+        tok = r.get("choice") or ""
+        o = _offers.get(tok)
+        if o is None:
+            # offers.json lost the token (or a restart raced the save): the row
+            # carries enough to grab on its own.
+            d = _detail_dict(r)
+            opt = next((x for x in (d.get("options") or []) if isinstance(x, dict)
+                        and x.get("tok") == tok and x.get("guid")), None)
+            if opt is None:
+                log(f"choice {tok!r} on '{r.get('title')}' matches no option; clearing it")
+                sb("PATCH", f"media_requests?id=eq.{r['id']}",
+                   {"choice": None}, prefer="return=minimal")
+                continue
+            o = _offers[tok] = {"app": opt.get("app") or "radarr", "guid": opt["guid"],
+                                "indexerId": opt.get("indexerId"), "title": opt.get("title") or "?",
+                                "seeders": opt.get("seeders") or 0, "why": opt.get("why") or "",
+                                "search": opt.get("search"), "made": time.time(),
+                                "grabbed": False, "req_id": r["id"]}
+        o.setdefault("req_id", r["id"])
+        if o.get("grabbed"):
+            _settle_choice(o, "cue")                  # Telegram got there first; just move the row
+            continue
+        code, resp = _grab_offer(o)
+        if code in (200, 201, 202):
+            log(f"grabbed Cue pick for '{r.get('title')}': {o['title'][:60]}")
+            _settle_choice(o, "cue")
+            tg(f"Grabbing your pick for {r.get('title')}: {o['title'][:80]}", key=None)
+            continue
+        # Leave the row on 'choosing' with the pick cleared so he can choose
+        # another; say why in detail so the tray shows it.
+        log(f"Cue pick grab failed {code}: {str(resp)[:200]}")
+        d = _detail_dict(r)
+        d["choice_error"] = f"Radarr said {code} for that copy; pick another"
+        sb("PATCH", f"media_requests?id=eq.{r['id']}",
+           {"choice": None, "detail": json.dumps(d)}, prefer="return=minimal")
+        tg(f"Could not grab that copy of {r.get('title')} ({code}). Pick another.", key=None)
+
+
+def expire_choices():
+    """An 'options' request nobody answered for CHOOSE_GRACE: take the auto path.
+
+    A request must not sit parked on a decision forever, and a day-old list is
+    stale anyway (guids rot, swarms change). Falls into choose_release, the
+    same speed-first flow an 'auto' push gets, and says so.
+    """
+    code, rows = sb("GET", "media_requests?status=eq.choosing&choice=is.null&media_type=eq.movie"
+                           "&select=id,title,detail&limit=20")
+    if code != 200 or not rows:
+        return
+    for r in rows:
+        d = _detail_dict(r)
+        since = d.get("choose_since")
+        if not since or _age_secs(since) < CHOOSE_GRACE:
+            continue
+        rid = d.get("arr_id")
+        if not rid:
+            continue
+        label = r.get("title") or "?"
+        path = f"release?movieId={rid}"
+        picked = None
+        try:
+            picked = choose_release("radarr", RADARR, path, label)
+        except Exception as e:
+            log("choice-expiry pick failed", repr(e))
+        if picked is None:
+            arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
+        for k in ("options", "choose_since", "choice_error"):
+            d.pop(k, None)
+        d["mode"] = "auto"
+        d["options_expired"] = True
+        if picked == "asked":
+            d["asked_at"] = _now_iso()
+        d["msg"] = "no pick in %dh, took the auto path" % (CHOOSE_GRACE // 3600)
+        sb("PATCH", f"media_requests?id=eq.{r['id']}",
+           {"status": "added", "detail": json.dumps(d)}, prefer="return=minimal")
+        log(f"options expired for '{label}': {picked or 'handed back to Radarr'}")
+        tg(f"No pick for {label} in {CHOOSE_GRACE // 3600}h, so I went ahead the usual way.",
+           key=f"choiceexpired:{r['id']}")
 
 
 class _GrabHandler(BaseHTTPRequestHandler):
@@ -2402,25 +3293,16 @@ class _GrabHandler(BaseHTTPRequestHandler):
             return self._page(404, "Link expired", "Push the title again from Cue.")
         if o.get("grabbed"):
             return self._page(200, "Already grabbed", o["title"])
-        target = RADARR if o["app"] == "radarr" else SONARR
-        body = {"guid": o["guid"], "indexerId": o["indexerId"]}
-        code, resp = arr(target, "POST", "release", body)
-        if code not in (200, 201, 202) and "cache" in str(resp).lower() and o.get("search"):
-            # The guid outlived the app's release cache (it holds only the last
-            # search). Re-run the same search to repopulate it, then try once
-            # more -- otherwise every button goes dead within the hour.
-            log("grab: release cache miss, re-searching")
-            arr(target, "GET", o["search"])
-            code, resp = arr(target, "POST", "release", body)
+        code, resp = _grab_offer(o)
         if code not in (200, 201, 202):
             log(f"manual grab failed {code}: {str(resp)[:200]}")
             return self._page(502, "Grab failed",
                               f"{o['app']} said {code}. The release may be gone from the "
                               f"indexer now. Push the title again from Cue.")
-        o["grabbed"] = True
-        _offers_save()
+        _settle_choice(o, "telegram")
         log(f"manual grab via Telegram: {o['title']}")
-        tg(f"Grabbing: {o['title']}\nRule waived: {o['why']}", key=None)
+        tg(f"Grabbing: {o['title']}" + (f"\nRule waived: {o['why']}" if o.get("why") else ""),
+           key=None)
         return self._page(200, "Grabbing it", o["title"])
 
 
@@ -2489,6 +3371,8 @@ def escalate_stuck(row, mt, arr_id):
 
     if mt == "tv":
         n = _monitored_count(arr_id, season)
+        if n == 0 and _is_cancelled(target, mt, arr_id):
+            return False        # deliberately called off -- do NOT re-monitor it
         if n == 0:
             try:
                 fixed = _monitor_all(arr_id)
@@ -2719,12 +3603,16 @@ def tick():
                prefer="return=minimal")
             log(f"{req['media_type']} '{req['title']}' -> {status}: {detail}")
             stamp_fulfillment(req.get("rec_id"), _push_legs(req, status, msg, det))
+    # Cue "show me options": act on a pick, or give up waiting for one
+    process_choices()
+    expire_choices()
     # feed live download progress back to the app
     monitor_downloads()
     monitor_books()
     # Cue "resume in audio" -> write listen position into Audiobookshelf
     process_seeks()
     # self-heal dead downloads
+    prioritise_first_episodes()
     reap_stalled("radarr", RADARR, "MoviesSearch", "movieId")
     reap_stalled("sonarr", SONARR, "SeriesSearch", "seriesId")
     reap_stalled_books()

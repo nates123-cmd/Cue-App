@@ -9,6 +9,7 @@ import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CaptureSheet } from './components/CaptureSheet'
 import { FinishSheet } from './components/FinishSheet'
+import { PushModeSheet } from './components/PushModeSheet'
 import { RecsPage } from './pages/Recs'
 import { LibraryPage } from './pages/Library'
 import { ActivePage } from './pages/Active'
@@ -186,7 +187,7 @@ export default function App() {
   // by media_type (movie→Radarr, tv→Sonarr, book→Prowler). Books carry no
   // tmdb_id, so the author is packed into `detail` to help the book resolver.
   // user_id is filled by the DB default (auth.uid()); RLS scopes it to this user.
-  const pushToRadarr = async (item) => {
+  const submitPush = async (item, mode = 'auto') => {
     const target = pushTarget(item.type)
     if (!target) throw new Error(`No download target for ${item.type}`)
     const ext = item.extension || {}
@@ -222,7 +223,12 @@ export default function App() {
       title: item.title,
       year: year ? Number(year) : null,
       season,
-      detail: item.type === 'book' && ext.author ? JSON.stringify({ author: ext.author }) : null,
+      // Movies carry the pick mode (auto | fastest | options) chosen in the
+      // PushModeSheet; the bridge reads it off the row and keeps it in the JSON
+      // it writes back. Books carry the author for the book resolver instead.
+      detail: item.type === 'book' && ext.author
+        ? JSON.stringify({ author: ext.author })
+        : item.type === 'movie' && mode !== 'auto' ? JSON.stringify({ mode }) : null,
       // Lets the Beelink daemons stamp fulfillment back onto the right card.
       // Matching by title from the box is fuzzy — the importer strips
       // punctuation for folder names and release titles differ again.
@@ -247,7 +253,40 @@ export default function App() {
         console.warn('fulfillment stamp failed (push still queued)', e)
       }
     }
-    return { duplicate: false }
+    return { duplicate: false, id: inserted?.id || null }
+  }
+
+  // The button every push goes through. Movies get the follow-up sheet
+  // (auto / fastest / show me options) before anything is written; TV and books
+  // go straight in as before. Resolves to the insert's result, or
+  // { cancelled: true } when the sheet is dismissed without a choice, so the
+  // caller can drop its "Sending…" state instead of showing a tick.
+  const [pendingPush, setPendingPush] = useState(null)   // { item, resolve }
+  const pushToRadarr = (item) => {
+    if (item.type !== 'movie') return submitPush(item, 'auto')
+    return new Promise((resolve) => setPendingPush({ item, resolve }))
+  }
+  const closePushSheet = () => {
+    setPendingPush((p) => {
+      if (p && !p.settled) p.resolve({ cancelled: true })
+      return null
+    })
+  }
+  // Called by the sheet with the mode. Marks the promise settled first so a
+  // later close does not report a cancel on a push that already went through.
+  const submitPendingPush = async (mode) => {
+    const p = pendingPush
+    if (!p) return { cancelled: true }
+    try {
+      const res = await submitPush(p.item, mode)
+      p.settled = true
+      p.resolve(res)
+      return res
+    } catch (e) {
+      p.settled = true
+      p.resolve({ cancelled: true, error: e })
+      throw e
+    }
   }
 
   const signOut = () => supabase.auth.signOut()
@@ -387,6 +426,12 @@ export default function App() {
             recommenders={recommenders}
           />
         )}
+
+        <PushModeSheet
+          pending={pendingPush}
+          onSubmit={submitPendingPush}
+          onClose={closePushSheet}
+        />
 
         <CaptureSheet
           open={captureOpen}

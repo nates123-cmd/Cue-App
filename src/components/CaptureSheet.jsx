@@ -141,7 +141,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
     setPushState('pushing'); setSaveErr(null)
     try {
       const item = await onAdd(draft)
-      await onPushToRadarr(item || draft)
+      const res = await onPushToRadarr(item || draft)
+      if (res?.cancelled) { setPushState(null); return }   // queued, but the push sheet was dismissed
       setPushState('sent')
       setTimeout(onClose, 1000)
     } catch (e) { setSaveErr(e?.message || 'Push failed — try again.'); setPushState('error') }
