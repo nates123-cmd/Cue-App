@@ -98,6 +98,7 @@ export function OptionList({ row, options, onPicked, compact = false }) {
             }}>
               {busy ? 'Sending…' : chosen ? 'Grabbing' : (
                 `${o.gb != null ? `${Number(o.gb).toFixed(1)} GB` : '? GB'} · ${o.seeders ?? 0} seeders` +
+                `${o.uploaded ? ` · up ${o.uploaded}` : ''}` +
                 `${o.quality ? ` · ${o.quality}` : ''}` +
                 `${o.ok ? '' : ` · ${o.why || 'outside your rules'}`}`
               )}

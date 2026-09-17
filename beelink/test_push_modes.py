@@ -43,11 +43,21 @@ for r in opts:
 print("options list: PASS (%d candidates, %d in rules)" % (len(opts), sum(ok_flags)))
 
 d = b._option_dict("tok123", opts[0], "radarr", "release?movieId=1")
-for k in ("tok", "title", "gb", "seeders", "per_gb", "ok", "why", "guid", "indexerId", "app", "search"):
+for k in ("tok", "title", "gb", "seeders", "per_gb", "uploaded", "ok", "why", "guid", "indexerId", "app", "search"):
     assert k in d, k
 assert d["tok"] == "tok123" and d["app"] == "radarr"
 assert (d["ok"] and d["why"] == "") or (not d["ok"] and d["why"])
 print("option dict: PASS")
+
+# --- upload date: shown as a day in every line and on the Cue option ---------
+dated = dict(opts[0], publishDate="2012-08-15T22:00:00Z")
+assert b._uploaded(dated) == "2012-08-15"
+assert b._describe(dated).endswith(", up 2012-08-15")
+assert b._option_dict("t", dated, "radarr", "x")["uploaded"] == "2012-08-15"
+undated = dict(opts[0]); undated.pop("publishDate", None)
+assert b._uploaded(undated) == "" and "up " not in b._describe(undated)   # no date, no noise
+assert b._uploaded(dict(opts[0], publishDate="bad")) == ""
+print("upload date: PASS")
 
 # --- "fastest": rules waived, but never a wrong or junk release -------------
 ok, below = b._speed_split(rels)

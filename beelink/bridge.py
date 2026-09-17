@@ -2499,9 +2499,19 @@ def _speed_split(rels):
     return ok, below
 
 
+def _uploaded(rel):
+    """The day the release was first posted (Radarr/Sonarr `publishDate`), as
+    YYYY-MM-DD, or '' when the indexer did not say. Nate reads this to tell a
+    fresh rip from a decade-old swarm; the seeder count alone hides that."""
+    p = rel.get("publishDate") or ""
+    return p[:10] if len(p) >= 10 else ""
+
+
 def _describe(rel):
-    return "%.1f GB, %s seeders, %.0f seed/GB" % (
+    s = "%.1f GB, %s seeders, %.0f seed/GB" % (
         (rel.get("size") or 0) / 1e9, rel.get("seeders") or 0, _per_gb(rel))
+    up = _uploaded(rel)
+    return s + (", up %s" % up if up else "")
 
 
 def _force_grab(target, rel, why):
@@ -2615,6 +2625,7 @@ def _option_dict(tok, rel, app_name, search_path):
             "gb": round((rel.get("size") or 0) / 1e9, 2),
             "seeders": rel.get("seeders") or 0,
             "per_gb": round(_per_gb(rel), 1),
+            "uploaded": _uploaded(rel),
             "quality": q, "indexer": rel.get("indexer"),
             "ok": bool(rel.get("approved")),
             "why": "" if rel.get("approved")
@@ -3408,6 +3419,7 @@ def escalate_stuck(row, mt, arr_id):
     buttons = []
     for i, r in enumerate(cands, 1):
         lines.append(f"{i}. {(r.get('title') or '?')[:70]}")
+        lines.append(f"   {_describe(r)}")
         lines.append(f"   {'; '.join(r.get('rejections') or [])[:120]}")
         label, url = _offer(app_name, r, path)
         buttons.append((f"{i}. {label}", url))
