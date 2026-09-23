@@ -119,7 +119,7 @@ function Row({ row, onDelete, onPicked }) {
             <OptionList row={row} options={optionsOf(row)} compact onPicked={() => onPicked?.(row)} />
           </div>
         )}
-        {(v.tone === 'fail' || v.tone === 'ask') && v.msg && (
+        {(v.tone === 'fail' || v.tone === 'ask' || row.status === 'watching') && v.msg && (
           <div style={{
             marginTop: 5, fontFamily: 'var(--mono)', fontSize: 9, lineHeight: 1.4,
             color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

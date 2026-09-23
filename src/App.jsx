@@ -223,12 +223,13 @@ export default function App() {
       title: item.title,
       year: year ? Number(year) : null,
       season,
-      // Movies carry the pick mode (auto | fastest | options) chosen in the
-      // PushModeSheet; the bridge reads it off the row and keeps it in the JSON
-      // it writes back. Books carry the author for the book resolver instead.
+      // Movies carry the pick mode (auto | fastest | options | watch) and TV
+      // the follow mode (auto | watch) chosen in the PushModeSheet; the bridge
+      // reads it off the row and keeps it in the JSON it writes back. Books
+      // carry the author for the book resolver instead.
       detail: item.type === 'book' && ext.author
         ? JSON.stringify({ author: ext.author })
-        : item.type === 'movie' && mode !== 'auto' ? JSON.stringify({ mode }) : null,
+        : (item.type === 'movie' || item.type === 'tv') && mode !== 'auto' ? JSON.stringify({ mode }) : null,
       // Lets the Beelink daemons stamp fulfillment back onto the right card.
       // Matching by title from the box is fuzzy — the importer strips
       // punctuation for folder names and release titles differ again.
@@ -257,13 +258,14 @@ export default function App() {
   }
 
   // The button every push goes through. Movies get the follow-up sheet
-  // (auto / fastest / show me options) before anything is written; TV and books
-  // go straight in as before. Resolves to the insert's result, or
+  // (auto / fastest / show me options / wait for a good copy) and TV a
+  // two-option one (auto / follow the season) before anything is written;
+  // books go straight in as before. Resolves to the insert's result, or
   // { cancelled: true } when the sheet is dismissed without a choice, so the
   // caller can drop its "Sending…" state instead of showing a tick.
   const [pendingPush, setPendingPush] = useState(null)   // { item, resolve }
   const pushToRadarr = (item) => {
-    if (item.type !== 'movie') return submitPush(item, 'auto')
+    if (item.type !== 'movie' && item.type !== 'tv') return submitPush(item, 'auto')
     return new Promise((resolve) => setPendingPush({ item, resolve }))
   }
   const closePushSheet = () => {

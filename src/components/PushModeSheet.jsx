@@ -15,9 +15,16 @@ import { chooseOption, fetchRequest, optionsOf } from '../lib/downloads'
 //   options  - the bridge writes the best few releases onto the request row and
 //              parks it on status 'choosing'. They show up here, in the tray,
 //              and as Telegram buttons. Nothing downloads until one is tapped.
+//   watch    - "wait for a good copy". No search at all until Radarr's own
+//              availability gate flips on the digital release date; then the
+//              first WEB copy inside the rules is taken and Telegram says so.
+//              A theater rip that sneaks in before then is relabelled so the
+//              real copy still replaces it. Status 'watching' in the tray.
 //
-// TV and books never see this sheet: a season is many files, and the bridge's
-// season-pack logic owns that choice.
+// TV sees a two-option version: auto (today's season grab) or follow the
+// season (the same `watch` mode): aired episodes now, then each new episode as
+// it lands, one Telegram ping per episode, done after the finale. Books never
+// see the sheet.
 
 export const PUSH_MODES = [
   {
@@ -35,7 +42,32 @@ export const PUSH_MODES = [
     title: 'Show me options',
     blurb: 'The best few copies, listed here and on Telegram. Nothing downloads until you pick.',
   },
+  {
+    key: 'watch',
+    title: 'Wait for a good copy',
+    blurb: 'No theater rips. Waits for the digital release, then grabs the WEB copy itself and pings Telegram.',
+  },
 ]
+
+export const TV_PUSH_MODES = [
+  {
+    key: 'auto',
+    title: 'Auto',
+    blurb: 'Grab the aired episodes now, fastest copies inside your rules.',
+  },
+  {
+    key: 'watch',
+    title: 'Follow the season',
+    blurb: 'Aired episodes now, then each new one as it lands. One Telegram ping per episode.',
+  },
+]
+
+// Which list the sheet shows for an item type; null means no sheet at all.
+export function modesFor(type) {
+  if (type === 'movie') return PUSH_MODES
+  if (type === 'tv') return TV_PUSH_MODES
+  return null
+}
 
 const OPTIONS_POLL_MS = 5000
 const OPTIONS_WAIT_MS = 4 * 60 * 1000   // a Radarr interactive search is normally < 1 min
@@ -118,6 +150,7 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
   const [phase, setPhase] = useState('pick')      // pick | sending | waiting | options | done | error
   const [row, setRow] = useState(null)
   const [error, setError] = useState(null)
+  const [chosen, setChosen] = useState(null)   // mode tapped, for the done copy
   const timer = useRef(null)
   const started = useRef(0)
 
@@ -126,15 +159,18 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
   }, [])
 
   useEffect(() => {
-    setPhase('pick'); setRow(null); setError(null)
+    setPhase('pick'); setRow(null); setError(null); setChosen(null)
     return () => clearInterval(timer.current)
   }, [pending])
 
   if (!pending || !host) return null
   const { item } = pending
+  const modes = modesFor(item.type) || PUSH_MODES
+  const arrName = item.type === 'tv' ? 'Sonarr' : 'Radarr'
 
   const choose = async (mode) => {
     if (phase !== 'pick') return
+    setChosen(mode)
     setPhase('sending')
     setError(null)
     let res
@@ -177,16 +213,22 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
   }
 
   const heading = {
-    pick: 'How should it pick the file?',
+    pick: item.type === 'tv' ? 'How should it follow the show?' : 'How should it pick the file?',
     sending: 'Sending…',
     waiting: 'Searching the indexers…',
     options: 'Pick a copy',
-    done: 'Queued in Radarr',
+    done: chosen === 'watch'
+      ? (item.type === 'tv' ? 'Following the season' : 'Waiting for a good copy')
+      : `Queued in ${arrName}`,
     error: 'Push failed',
   }[phase]
 
   const fellBack = phase === 'done' && row && row.status !== 'choosing' && row.detail
-  const doneMsg = row?.choice
+  const doneMsg = chosen === 'watch'
+    ? (item.type === 'tv'
+      ? 'The tray shows the next episode date; Telegram pings as each one lands.'
+      : 'The tray shows the release date. Nothing downloads until then; Telegram pings when it does.')
+    : row?.choice
     ? 'Grabbing that one.'
     : fellBack
       ? 'Radarr found nothing worth choosing between, so it went ahead on its own.'
@@ -211,7 +253,7 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
         WebkitOverflowScrolling: 'touch',
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-          <Mono size={9} dim>Push to Radarr</Mono>
+          <Mono size={9} dim>Push to {arrName}</Mono>
           <button onClick={onClose} disabled={phase === 'sending'} style={{ ...btnGhost, padding: '3px 8px', fontSize: 9 }}>
             {phase === 'options' || phase === 'waiting' ? 'Pick later' : 'Close'}
           </button>
@@ -230,7 +272,7 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
 
         {phase === 'pick' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {PUSH_MODES.map((m) => (
+            {modes.map((m) => (
               <button key={m.key} onClick={() => choose(m.key)} style={{
                 appearance: 'none', cursor: 'pointer', textAlign: 'left',
                 padding: '11px 13px', borderRadius: 6,
