@@ -1937,6 +1937,24 @@ def process(req):
             if picked is None:
                 arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
             return "added", msg, d
+        if rid and mode == "watch":
+            # "Wait for a good copy": no search of any kind until Radarr's own
+            # availability gate flips on the digital date. If it is already
+            # out (or a real copy is already on disk) there is nothing to wait
+            # for, so fall through to the auto path below.
+            st = watch_movie_state(rid)
+            if st is not None and not st["available"] and not st["real_file"]:
+                d.update(watch_detail(st))
+                d["watch_since"] = _now_iso()
+                if st.get("rip_held"):
+                    tg("%s: a theater rip is on disk. Holding it back and waiting for "
+                       "the WEB copy (%s)." % (label, st.get("release_on") or "no date yet"),
+                       key="riphold:%s" % rid)
+                return "watching", "%s -- waiting for release %s" % (
+                    msg, st.get("release_on") or "(no digital date yet)"), d
+            log("watch: %s is already available, taking the auto path" % label)
+            d["mode"] = mode = "auto"
+            d["watch_fallthrough"] = True
         if SPEED_FIRST and rid:
             picked = None
             try:
@@ -1952,8 +1970,20 @@ def process(req):
                 arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
         return "added", msg, d
     if mt == "tv":
+        mode = _req_mode(req)
+        if mode == "watch" and _req_season(req) is None:
+            # "Follow the season" with no season picked = the latest one. Pin it
+            # on the request copy so add_series narrows to that season, and on
+            # the detail so the follower scores the right episodes.
+            latest = _latest_season(req["title"])
+            if latest is not None:
+                req = dict(req, season=latest)
         msg, rid = add_series(req)
         d = {"app": "Sonarr", "arr_id": rid}
+        if mode == "watch":
+            d["mode"] = "watch"
+            if _req_season(req) is not None:
+                d["season"] = _req_season(req)
         if SPEED_FIRST and rid:
             picked = None
             try:
@@ -1972,6 +2002,19 @@ def process(req):
                 else:
                     arr(SONARR, "POST", "command",
                         {"name": "SeasonSearch", "seriesId": rid, "seasonNumber": sn})
+        if mode == "watch" and rid:
+            # Aired episodes are being grabbed exactly as auto would; the
+            # difference is the row stays alive for the rest of the season.
+            summ = tv_watch_summary(rid, _req_season(req))
+            if summ is not None and summ["complete"]:
+                log("watch: %s season already complete on disk, taking the auto path" % req["title"])
+                d["watch_fallthrough"] = True
+                return "added", msg, d
+            if summ is not None:
+                d.update(summ["detail"])
+                d["on_disk"] = summ["on_disk"]
+            d["watch_since"] = _now_iso()
+            return "watching", "%s -- following the season" % msg, d
         return "added", msg, d
     if mt == "book":
         msg, extra = add_book(req)
@@ -2241,6 +2284,303 @@ def monitor_downloads():
         stamp_fulfillment(r.get("rec_id"), {"download": leg})
 
 
+# ---------------------------------------------------------------------------
+# "watch" push mode: wait for a good copy (movie) / follow the season (TV)
+#
+# Both park the request on status 'watching'. Nothing here grabs anything for
+# a movie: Radarr's minimumAvailability=released gate plus its RSS sync is the
+# whole mechanism, and this code only watches the date, moves the row to
+# 'added' when the gate flips (so monitor_downloads takes over), and stops a
+# theater rip from satisfying the request. For TV, Sonarr's RSS grabs each
+# episode as it airs; this counts them onto the row, pings per episode and
+# closes the row after the finale.
+# ---------------------------------------------------------------------------
+
+WATCH_NO_DATE_DAYS = int(os.environ.get("WATCH_NO_DATE_DAYS", "45"))   # in cinemas this long with no digital date -> say so
+WATCH_EP_GRACE = int(os.environ.get("WATCH_EP_GRACE", "21600"))       # secs an aired episode may be missing before a nudge search
+
+# Words in a release/file name that mean "filmed off a screen or ripped from a
+# cinema package", none of which Nate wants to keep. Matched as whole tokens on
+# the dot/dash/space-split name, so "TS" cannot hit inside "ARTS".
+_RIP_TOKENS = {"CAM", "HDCAM", "CAMRIP", "TS", "HDTS", "TELESYNC", "TC", "HDTC",
+               "TELECINE", "DCPRIP", "DCP", "SCR", "SCREENER", "DVDSCR", "WORKPRINT", "WP"}
+
+
+def _theater_rip(name):
+    """True if a release or file name says it came from a cinema, not a stream."""
+    if not name:
+        return False
+    toks = re.split(r"[.\-_ \[\]()]+", str(name).upper())
+    return any(t in _RIP_TOKENS for t in toks)
+
+
+def _movie_release_on(movie):
+    """The earliest of Radarr's digital/physical dates as YYYY-MM-DD, or None."""
+    days = []
+    for k in ("digitalRelease", "physicalRelease"):
+        v = movie.get(k)
+        if isinstance(v, str) and len(v) >= 10:
+            days.append(v[:10])
+    return min(days) if days else None
+
+
+def _days_since(iso_day):
+    if not iso_day:
+        return None
+    try:
+        d = datetime.fromisoformat(str(iso_day)[:10]).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return (datetime.now(timezone.utc) - d).days
+
+
+def watch_movie_state(arr_id):
+    """One read of Radarr for a watched movie: dates, availability, what is on disk.
+
+    Returns None when Radarr cannot be read. `real_file` means a copy that is
+    not a theater rip is on disk. A theater rip that Radarr scored at or above
+    the WEB cutoff is relabelled TELECINE here (`rip_held`), because otherwise
+    Radarr believes the cutoff is met and never replaces it -- that is exactly
+    what happened with Coyote vs. Acme on 2026-09-20.
+    """
+    code, m = arr(RADARR, "GET", f"movie/{arr_id}")
+    if code != 200 or not isinstance(m, dict):
+        return None
+    st = {"arr_id": arr_id, "title": m.get("title"), "monitored": bool(m.get("monitored")),
+          "available": bool(m.get("isAvailable")), "has_file": bool(m.get("hasFile")),
+          "release_on": _movie_release_on(m), "in_cinemas": (m.get("inCinemas") or "")[:10] or None,
+          "real_file": False, "rip_held": False}
+    if not st["has_file"]:
+        return st
+    code, files = arr(RADARR, "GET", f"moviefile?movieId={arr_id}")
+    if code != 200 or not isinstance(files, list) or not files:
+        return st
+    f = files[0]
+    name = " ".join(str(f.get(k) or "") for k in ("sceneName", "originalFilePath", "relativePath"))
+    q = ((f.get("quality") or {}).get("quality") or {})
+    if _theater_rip(name) or (q.get("source") in ("cam", "telesync", "telecine", "workprint")):
+        st["rip_held"] = True
+        if q.get("source") not in ("cam", "telesync", "telecine", "workprint"):
+            f["quality"]["quality"] = {"id": 27, "name": "TELECINE", "source": "telecine",
+                                       "resolution": q.get("resolution") or 1080, "modifier": "none"}
+            c2, resp = arr(RADARR, "PUT", f"moviefile/{f['id']}", f)
+            log("watch: relabelled theater rip on '%s' as TELECINE -> %s" % (st["title"], c2))
+        return st
+    st["real_file"] = True
+    return st
+
+
+def watch_detail(st):
+    """The keys Cue's tray reads off a watching movie row."""
+    d = {"release_on": st.get("release_on")}
+    if st.get("rip_held"):
+        d["rip_held"] = True
+    return d
+
+
+def _latest_season(title):
+    """Highest real season number Sonarr knows for a show, or None."""
+    for term in _lookup_terms(title):
+        code, res = arr(SONARR, "GET", "series/lookup?term=" + urllib.parse.quote(term))
+        if code != 200:
+            continue
+        s = best_match(res, title, None)
+        if s:
+            nums = [x.get("seasonNumber") for x in (s.get("seasons") or []) if (x.get("seasonNumber") or 0) > 0]
+            return max(nums) if nums else None
+    return None
+
+
+def _tv_watch_plan(eps, season, now=None):
+    """Pure: from Sonarr's episode list, what a followed season looks like.
+
+    Counts every monitored episode of the season, aired or not, so the tray can
+    say 3/10. `next_ep`/`next_air` is the first unaired one. `complete` is every
+    monitored episode on disk with none left to air. `missing` are aired ones
+    with no file (RSS missed them, or they aired before the push).
+    """
+    now = now or datetime.now(timezone.utc)
+    on_disk, missing, unaired = [], [], []
+    for e in eps:
+        if season is not None and e.get("seasonNumber") != int(season):
+            continue
+        if not e.get("monitored") or (e.get("seasonNumber") or 0) == 0:
+            continue
+        n = e.get("episodeNumber")
+        air = e.get("airDateUtc")
+        aired = True
+        if air:
+            try:
+                aired = datetime.fromisoformat(air.replace("Z", "+00:00")) <= now
+            except Exception:
+                aired = True
+        if e.get("hasFile"):
+            on_disk.append(n)
+        elif aired:
+            missing.append((n, e.get("id")))
+        else:
+            unaired.append((air or "9999", n, e.get("id")))
+    unaired.sort()
+    total = len(on_disk) + len(missing) + len(unaired)
+    sn = int(season) if season is not None else None
+    tag = (lambda n: "S%02dE%02d" % (sn, n)) if sn is not None else (lambda n: "E%02d" % n)
+    detail = {"episodes": "%d/%d" % (len(on_disk), total),
+              "pct": round(len(on_disk) / total * 100, 1) if total else 0}
+    if unaired:
+        detail["next_ep"] = tag(unaired[0][1])
+        detail["next_air"] = str(unaired[0][0])[:10]
+    else:
+        detail["next_ep"] = None
+        detail["next_air"] = None
+    return {"on_disk": sorted(on_disk), "missing": missing, "unaired": unaired,
+            "total": total, "detail": detail, "tag": tag,
+            "complete": bool(total) and not missing and not unaired}
+
+
+def tv_watch_summary(series_id, season):
+    code, eps = arr(SONARR, "GET", f"episode?seriesId={series_id}")
+    if code != 200 or not isinstance(eps, list):
+        return None
+    return _tv_watch_plan(eps, season)
+
+
+def monitor_watching():
+    """Walk the 'watching' rows: flip a movie when its date arrives, count a
+    followed season onto its row, close either when it is really done."""
+    code, rows = sb("GET",
+                    "media_requests?status=eq.watching&media_type=in.(movie,tv)"
+                    "&select=id,title,media_type,status,detail,tmdb_id,year,rec_id,season&limit=100")
+    if code != 200 or not rows:
+        return
+    qidx = None
+    for r in rows:
+        d = _detail_dict(r)
+        mt = r["media_type"]
+        target = RADARR if mt == "movie" else SONARR
+        arr_id = d.get("arr_id")
+        changed = False
+        if arr_id is None:
+            arr_id = (_radarr_id(r.get("tmdb_id"), r.get("title"), r.get("year")) if mt == "movie"
+                      else _sonarr_id(r.get("title")))
+            if arr_id is None:
+                continue
+            d["arr_id"] = arr_id
+            changed = True
+        new_status = "watching"
+        leg = {"state": "searching"}
+        try:
+            if _is_cancelled(target, mt, arr_id):
+                d["outcome"] = "cancelled"
+                d["cancelled_at"] = _now_iso()
+                code, resp = sb("PATCH", f"media_requests?id=eq.{r['id']}",
+                                {"status": "cancelled", "detail": json.dumps(d)}, prefer="return=minimal")
+                if code in (200, 204):
+                    log(f"cancelled watched {mt} '{r.get('title')}'")
+                    tg(f"Stopped watching for {r.get('title')}.", key=f"cancelled:{arr_id}")
+                else:
+                    log(f"cancel PATCH failed {code} for '{r.get('title')}': {str(resp)[:180]}")
+                continue
+            if mt == "movie":
+                st = watch_movie_state(arr_id)
+                if st is None:
+                    continue
+                for k, v in watch_detail(st).items():
+                    if d.get(k) != v:
+                        d[k] = v
+                        changed = True
+                if not st["rip_held"]:
+                    d.pop("rip_held", None)
+                if st["real_file"]:
+                    new_status = "downloaded"
+                    d["pct"] = 100
+                    leg = {"state": "downloaded"}
+                elif st["available"]:
+                    # The gate flipped. Hand the row to the normal pipeline;
+                    # Radarr's RSS is already on it, and one explicit search
+                    # closes the gap between RSS runs.
+                    new_status = "added"
+                    d["watch_released"] = _now_iso()
+                    d.pop("stuck_since", None)
+                    arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [arr_id]})
+                    tg("%s is out digitally. Grabbing the WEB copy now." % r.get("title"),
+                       key="released:%s" % arr_id)
+                elif not st["release_on"]:
+                    since = _days_since(st.get("in_cinemas"))
+                    if since is not None and since >= WATCH_NO_DATE_DAYS and not d.get("no_date_told"):
+                        tg("%s has been in cinemas %d days and TMDB still lists no digital date. "
+                           "Still watching by RSS; worth a look at TMDB." % (r.get("title"), since),
+                           key="nodate:%s" % arr_id)
+                        d["no_date_told"] = _now_iso()
+                        changed = True
+                if st["rip_held"] and d.get("rip_told") is None:
+                    tg("%s: a theater rip landed. Holding it back and waiting for the WEB copy (%s)."
+                       % (r.get("title"), st.get("release_on") or "no date yet"), key="riphold:%s" % arr_id)
+                    d["rip_told"] = _now_iso()
+                    changed = True
+            else:
+                season = r.get("season") if r.get("season") is not None else d.get("season")
+                plan = tv_watch_summary(arr_id, season)
+                if plan is None:
+                    continue
+                for k, v in plan["detail"].items():
+                    if d.get(k) != v:
+                        d[k] = v
+                        changed = True
+                before = set(d.get("on_disk") or [])
+                landed = [n for n in plan["on_disk"] if n not in before]
+                if landed:
+                    d["on_disk"] = plan["on_disk"]
+                    changed = True
+                    if before:      # the push tick seeds on_disk; only later arrivals get a ping
+                        for n in landed:
+                            tg("%s %s is ready." % (r.get("title"), plan["tag"](n)),
+                               key="ep:%s:%s" % (r["id"], n))
+                # what is in flight right now, so the tray can say "grabbing E3"
+                if qidx is None:
+                    qidx = _queue_index(SONARR, "seriesId")
+                rec = qidx.get(arr_id)
+                grabbing = None
+                if rec is not None:
+                    ep = (rec.get("episode") or {})
+                    if ep.get("episodeNumber") is not None:
+                        grabbing = plan["tag"](ep["episodeNumber"])
+                    else:
+                        grabbing = "an episode"
+                if d.get("grabbing") != grabbing:
+                    d["grabbing"] = grabbing
+                    changed = True
+                # An aired episode with no file and nothing in flight: RSS
+                # missed it (or it aired before the push and the season search
+                # lost it). One nudge per episode per grace period.
+                if rec is None and plan["missing"]:
+                    searched = d.get("searched") or {}
+                    for n, eid in plan["missing"]:
+                        last = searched.get(str(n))
+                        if eid and (not last or _age_secs(last) > WATCH_EP_GRACE):
+                            arr(SONARR, "POST", "command", {"name": "EpisodeSearch", "episodeIds": [eid]})
+                            searched[str(n)] = _now_iso()
+                            changed = True
+                    d["searched"] = searched
+                if plan["complete"]:
+                    new_status = "downloaded"
+                    d["pct"] = 100
+                    leg = {"state": "downloaded"}
+                elif rec is not None:
+                    leg = {"state": "downloading", "pct": d.get("pct")}
+        except Exception as e:
+            log("watch tick failed for '%s': %r" % (r.get("title"), e))
+            continue
+        if changed or new_status != r["status"]:
+            sb("PATCH", f"media_requests?id=eq.{r['id']}",
+               {"status": new_status, "detail": json.dumps(d)}, prefer="return=minimal")
+            log(f"watch {mt} '{r['title']}' -> {new_status} {d.get('release_on') or d.get('episodes') or ''}")
+            if new_status == "downloaded":
+                where = f" season {season}" if mt == "tv" and season is not None else ""
+                tg(f"Ready to watch: {r['title']}{where}" + (" (whole season on disk)" if mt == "tv" else ""),
+                   key=f"done:{r['id']}")
+        stamp_fulfillment(r.get("rec_id"), {"download": leg})
+
+
 BLOCKLIST_TTL = int(os.environ.get("BLOCKLIST_TTL", str(7 * 86400)))  # secs a blocklisting lasts
 _last_prune = {}                          # app_name -> last run, so one app cannot skip the other
 
@@ -2445,11 +2785,11 @@ ASK_GRACE = int(os.environ.get("ASK_GRACE", "1200"))          # secs to wait for
 CHOOSE_GRACE = int(os.environ.get("CHOOSE_GRACE", "86400"))   # secs an "options" row may wait for a pick
 MAX_CHOICES  = int(os.environ.get("MAX_CHOICES", "6"))        # rows in the options list
 
-PUSH_MODES = ("auto", "fastest", "options")
+PUSH_MODES = ("auto", "fastest", "options", "watch")
 
 
 def _req_mode(req):
-    """auto | fastest | options. Anything unparseable or unknown is auto."""
+    """auto | fastest | options | watch. Anything unparseable or unknown is auto."""
     try:
         d = json.loads(req.get("detail") or "{}")
     except Exception:
@@ -3620,6 +3960,7 @@ def tick():
     expire_choices()
     # feed live download progress back to the app
     monitor_downloads()
+    monitor_watching()
     monitor_books()
     # Cue "resume in audio" -> write listen position into Audiobookshelf
     process_seeks()

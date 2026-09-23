@@ -5,7 +5,10 @@
 // picks them up, adds them to Radarr/Sonarr, and — as of the status-feed work —
 // writes live progress back onto the SAME row: `status` walks
 // pending → added(=searching) → downloading → downloaded (or failed), and
-// `detail` carries a JSON blob { msg, app, arr_id, pct, eta }.
+// `detail` carries a JSON blob { msg, app, arr_id, pct, eta }. A "wait for a
+// good copy" / "follow the season" push parks on `watching` instead: a movie
+// until its digital release date (detail.release_on), a show until the season's
+// last episode is on disk (detail.episodes "3/10", next_ep, next_air).
 //
 // This hook surfaces those rows for the top-right DownloadTray bubble. RLS scopes
 // the select to the signed-in user (media_requests.user_id = auth.uid()).
@@ -13,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase'
 
-const ACTIVE = new Set(['pending', 'added', 'downloading', 'choosing'])
+const ACTIVE = new Set(['pending', 'added', 'downloading', 'choosing', 'watching'])
 const POLL_MS = 10000
 const RECENT_DONE_MS = 24 * 60 * 60 * 1000 // keep finished/failed visible for a day
 
@@ -80,6 +83,8 @@ export function statusView(row) {
       return row.choice
         ? { label: 'Grabbing…', tone: 'go', pct: null }
         : { label: 'Pick a copy', tone: 'ask', pct: null, msg: d.choice_error }
+    case 'watching':
+      return watchView(row, d, pct)
     case 'downloading':
       return { label: pct != null ? `Downloading ${pct}%` : 'Downloading', tone: 'go', pct, eta: d.eta }
     case 'downloaded':
@@ -95,11 +100,45 @@ export function statusView(row) {
   }
 }
 
+// Short month-day for the tray ("Sep 29"); the bridge writes plain YYYY-MM-DD.
+// Never through Date(): a bare day string parses as UTC midnight and shows the
+// day before in New York.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+export function shortDay(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''))
+  if (!m) return null
+  const mon = MONTHS[Number(m[2]) - 1]
+  return mon ? `${mon} ${Number(m[3])}` : null
+}
+
+// The parked "watching" row. A movie is waiting on a date; a show is being
+// followed episode by episode. Both are calm (tone wait): nothing is wrong,
+// the stack is doing exactly what was asked.
+function watchView(row, d, pct) {
+  if (row.media_type === 'tv') {
+    const eps = typeof d.episodes === 'string' ? d.episodes : null
+    const nextDay = d.next_air ? shortDay(d.next_air) : null
+    const next = d.next_ep ? (nextDay ? `${d.next_ep} ${nextDay}` : d.next_ep) : null
+    const label = d.grabbing
+      ? `Following · grabbing ${d.grabbing}`
+      : next ? `Following · next ${next}`
+        : 'Following · waiting on the finale'
+    return { label, tone: 'wait', pct, msg: eps ? `${eps} on disk` : undefined }
+  }
+  const day = shortDay(d.release_on)
+  if (d.rip_held) {
+    return { label: day ? `Waiting · ${day}` : 'Waiting for release', tone: 'wait', pct: null, msg: 'theater rip held back' }
+  }
+  return day
+    ? { label: `Waiting · ${day}`, tone: 'wait', pct: null }
+    : { label: 'Waiting for release', tone: 'wait', pct: null, msg: 'no digital date yet' }
+}
+
 // How "real" a row is. Pushing the same title twice leaves a zombie row —
 // Radarr answers "already in Radarr" so it never gets an arr_id and would sit on
 // "Searching" forever. Collapse duplicates by title+type and keep the row that
 // actually tracks a download (has arr_id, furthest along).
-const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, choosing: 2, pending: 1, failed: 0, cancelled: 0 }
+const STATUS_RANK = { downloading: 4, downloaded: 3, added: 2, choosing: 2, watching: 2, pending: 1, failed: 0, cancelled: 0 }
 
 function score(row) {
   const d = parseDetail(row.detail)
