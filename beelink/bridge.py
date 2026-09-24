@@ -2821,7 +2821,7 @@ def _speed_key(rel):
     return (_per_gb(rel), rel.get("seeders") or 0)
 
 
-def _norm_title(t):
+def _norm_release(t):
     """Collapse a release title for duplicate detection across indexers."""
     return re.sub(r"[^a-z0-9]+", "", (t or "").lower())
 
@@ -2901,11 +2901,11 @@ def _ask_which(app_name, target, path, label, best, below):
     # The same release comes back from several indexers. Offering it twice
     # burns a button on a choice that is not a choice -- the dry run on
     # Untold S06 offered the identical 720p file as options 1 and 2.
-    seen = {_norm_title(r.get("title")) for r in cands}
+    seen = {_norm_release(r.get("title")) for r in cands}
     for r in below:
         if r is best:
             continue
-        k = _norm_title(r.get("title"))
+        k = _norm_release(r.get("title"))
         if k in seen:
             continue
         seen.add(k)
@@ -2982,7 +2982,7 @@ def pick_options(rels):
     ok, below = _speed_split(rels)
     cands, seen = [], set()
     for r in ok + below:
-        k = _norm_title(r.get("title"))
+        k = _norm_release(r.get("title"))
         if k in seen:
             continue
         seen.add(k)
