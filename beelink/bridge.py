@@ -445,6 +445,44 @@ def _req_season(req):
         return None
 
 
+def _episodes_for(series_id, want, timeout=90):
+    """GET the episode list, waiting for Sonarr to actually populate it.
+
+    `POST /series` returns 201 the moment the row is written. The episodes are
+    pulled from TVDB by a background RefreshSeries that has NOT finished yet, so
+    a season-scoped add that calls straight into _monitor_episodes finds an
+    empty list and dies with "no episodes in seasons [N]". Because those adds
+    use monitor="none", the monitor step is the only thing that would ever turn
+    an episode on -- when it throws, the series is stranded in the library fully
+    unmonitored and nothing retries it.
+
+    That is exactly what happened on 2026-09-27: Fleabag, Six Feet Under, The
+    Comeback S3 and The Leftovers were all pushed within six minutes while the
+    indexers were busy, and all four lost the race. Whole-show adds never hit
+    this -- they pass monitor="all" and let Sonarr do the monitoring itself once
+    the refresh completes.
+
+    Returns whatever the last poll saw; the caller still decides if that is
+    usable, so a genuinely bad season number stays an error rather than hanging.
+    """
+    deadline = time.time() + timeout
+    delay = 1.0
+    while True:
+        code, eps = arr(SONARR, "GET", f"episode?seriesId={series_id}")
+        if code != 200 or not isinstance(eps, list):
+            raise RuntimeError(f"sonarr episode list {code}: {eps}")
+        if any(e.get("seasonNumber") in want for e in eps):
+            return eps
+        if time.time() >= deadline:
+            log(f"sonarr series {series_id}: still no episodes in seasons "
+                f"{sorted(want)} after {timeout}s")
+            return eps
+        log(f"sonarr series {series_id}: episodes not populated yet, "
+            f"retrying in {delay:.0f}s")
+        time.sleep(delay)
+        delay = min(delay * 2, 8.0)
+
+
 def _monitor_episodes(series_id, on_seasons, exclusive):
     """Write episode-level monitoring for whole seasons. Returns episodes turned on.
 
@@ -459,16 +497,15 @@ def _monitor_episodes(series_id, on_seasons, exclusive):
     Season 0 is never touched -- TVDB hangs hundreds of promo shorts off it
     (233 on Better Call Saul alone) and none of them are wanted.
     """
-    code, eps = arr(SONARR, "GET", f"episode?seriesId={series_id}")
-    if code != 200 or not isinstance(eps, list):
-        raise RuntimeError(f"sonarr episode list {code}: {eps}")
     want = {int(s) for s in on_seasons}
+    eps = _episodes_for(series_id, want)
     on  = [e["id"] for e in eps if e.get("seasonNumber") in want]
     off = [e["id"] for e in eps
            if e.get("seasonNumber") not in want and e.get("seasonNumber", 0) >= 1
            and e.get("monitored")]
     if not on:
-        raise RuntimeError(f"series {series_id}: no episodes in seasons {sorted(want)}")
+        raise RuntimeError(f"series {series_id}: no episodes in seasons "
+                           f"{sorted(want)} (waited for the Sonarr refresh)")
     if exclusive and off:
         arr(SONARR, "PUT", "episode/monitor", {"episodeIds": off, "monitored": False})
     code, resp = arr(SONARR, "PUT", "episode/monitor",
@@ -3171,6 +3208,7 @@ FIRST_EP_FIRST = os.environ.get("FIRST_EP_FIRST", "1") not in ("0", "false", "no
 FIRST_EP_MAX = int(os.environ.get("FIRST_EP_MAX", "5400"))   # never hold one back longer
 
 _held = {}          # torrent hash -> when we stopped it
+_gave_up = set()    # (series_id, season) whose hold we abandoned -- never re-impose it
 
 
 def prioritise_first_episodes():
@@ -3209,7 +3247,18 @@ def prioritise_first_episodes():
 
         # Let everything go when the leader has landed, or when we have been
         # holding the rest long enough that the wait is worse than the wait.
-        if leader is None or any(now - _held.get(h, now) > FIRST_EP_MAX for h in held):
+        #
+        # Giving up has to be STICKY. Releasing only starts the torrents; the
+        # next poll sees them running, re-stops them and resets every _held
+        # timer, so the season is re-held forever and downloads strictly one
+        # episode at a time. Observed 2026-09-28: the same 9 Leftovers torrents
+        # released at 21:42, 23:13, 00:45, 02:17, 03:49, 05:21 -- every 92
+        # minutes all night, making no progress beyond the single leader.
+        if any(now - _held.get(h, now) > FIRST_EP_MAX for h in held):
+            _gave_up.add((sid, season))
+        if leader is None:
+            _gave_up.discard((sid, season))   # season done, re-arm for next time
+        if leader is None or (sid, season) in _gave_up:
             if held:
                 qbit("torrents/start", {"hashes": "|".join(held)})
                 for h in held:
