@@ -49,6 +49,27 @@ describe('statusView — watching', () => {
     expect(v.msg).toBeUndefined()
   })
 
+  it('movie: a streaming original says Premieres', () => {
+    const v = statusView(row('watching', { release_on: '2026-10-16', premiere: 'streaming' }, { media_type: 'movie' }))
+    expect(v).toMatchObject({ label: 'Premieres · Oct 16', tone: 'wait', pct: null })
+  })
+
+  it('movie: out but no WEB copy yet reads as looking, not stuck', () => {
+    const v = statusView(row('watching', { release_on: '2026-10-16', premiere: 'streaming', released_at: '2026-10-16T00:00:20Z' }, { media_type: 'movie' }))
+    expect(v).toMatchObject({ label: 'Out · looking for the WEB copy', tone: 'wait' })
+  })
+
+  it('tv: a show that has not premiered reads its premiere date', () => {
+    const v = statusView(row('watching', { episodes: '0/4', next_ep: 'S01E01', next_air: '2026-10-16', premiere_on: '2026-10-16' }, { media_type: 'tv' }))
+    expect(v.label).toBe('Premieres · Oct 16')
+  })
+
+  it('tv: no episodes listed yet says so instead of "finale"', () => {
+    const v = statusView(row('watching', { episodes: '0/0', next_ep: null, next_air: null, premiere_on: null }, { media_type: 'tv' }))
+    expect(v.label).toBe('Following · no episodes listed yet')
+    expect(v.msg).toBeUndefined()
+  })
+
   it('movie: says when there is no date to wait on', () => {
     const v = statusView(row('watching', { release_on: null }, { media_type: 'movie' }))
     expect(v.label).toBe('Waiting for release')

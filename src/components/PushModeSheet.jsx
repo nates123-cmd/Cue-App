@@ -45,7 +45,7 @@ export const PUSH_MODES = [
   {
     key: 'watch',
     title: 'Wait for a good copy',
-    blurb: 'No theater rips. Waits for the digital release, then grabs the WEB copy itself and pings Telegram.',
+    blurb: 'For anything not out yet: in theaters or coming to Netflix and co. No theater rips. Waits for the release, grabs the WEB copy itself and pings Telegram.',
   },
 ]
 
@@ -58,7 +58,7 @@ export const TV_PUSH_MODES = [
   {
     key: 'watch',
     title: 'Follow the season',
-    blurb: 'Aired episodes now, then each new one as it lands. One Telegram ping per episode.',
+    blurb: 'Aired episodes now, then each new one as it lands, including a show that has not premiered yet. One Telegram ping per episode.',
   },
 ]
 

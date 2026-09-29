@@ -114,23 +114,36 @@ export function shortDay(ymd) {
 // The parked "watching" row. A movie is waiting on a date; a show is being
 // followed episode by episode. Both are calm (tone wait): nothing is wrong,
 // the stack is doing exactly what was asked.
+//
+// A streaming original (premiere: 'streaming', a Netflix doc and the like)
+// reads "Premieres", and so does a show with nothing aired yet (premiere_on).
+// Once the date has passed but no WEB copy has been grabbed (released_at), the
+// bridge keeps the row here for up to a day rather than paging "stuck".
 function watchView(row, d, pct) {
   if (row.media_type === 'tv') {
     const eps = typeof d.episodes === 'string' ? d.episodes : null
+    const premiere = d.premiere_on ? shortDay(d.premiere_on) : null
     const nextDay = d.next_air ? shortDay(d.next_air) : null
     const next = d.next_ep ? (nextDay ? `${d.next_ep} ${nextDay}` : d.next_ep) : null
     const label = d.grabbing
       ? `Following · grabbing ${d.grabbing}`
-      : next ? `Following · next ${next}`
-        : 'Following · waiting on the finale'
-    return { label, tone: 'wait', pct, msg: eps ? `${eps} on disk` : undefined }
+      : premiere ? `Premieres · ${premiere}`
+        : next ? `Following · next ${next}`
+          : eps === '0/0' ? 'Following · no episodes listed yet'
+            : 'Following · waiting on the finale'
+    return { label, tone: 'wait', pct, msg: eps && eps !== '0/0' ? `${eps} on disk` : undefined }
   }
   const day = shortDay(d.release_on)
+  const verb = d.premiere === 'streaming' ? 'Premieres' : 'Waiting'
+  if (d.released_at) {
+    return { label: 'Out · looking for the WEB copy', tone: 'wait', pct: null,
+      msg: d.rip_held ? 'theater rip held back' : undefined }
+  }
   if (d.rip_held) {
     return { label: day ? `Waiting · ${day}` : 'Waiting for release', tone: 'wait', pct: null, msg: 'theater rip held back' }
   }
   return day
-    ? { label: `Waiting · ${day}`, tone: 'wait', pct: null }
+    ? { label: `${verb} · ${day}`, tone: 'wait', pct: null }
     : { label: 'Waiting for release', tone: 'wait', pct: null, msg: 'no digital date yet' }
 }
 

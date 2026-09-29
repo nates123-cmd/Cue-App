@@ -93,4 +93,39 @@ plan = b._tv_watch_plan(eps, None, now=now)
 assert plan["tag"](3) == "E03" and plan["total"] == 5   # S1E7 counted, specials + unmonitored still out
 print("season plan (finale / edge cases): PASS")
 
+# --- streaming premieres: Norm (Netflix, 2026-10-16) -------------------------
+norm = {"digitalRelease": "2026-10-16T00:00:00Z", "inCinemas": None, "physicalRelease": None}
+assert b._streaming_premiere(norm)
+assert not b._streaming_premiere({"digitalRelease": "2026-10-16T00:00:00Z", "inCinemas": "2026-09-01T00:00:00Z"})
+assert not b._streaming_premiere({"digitalRelease": "2026-10-16T00:00:00Z", "physicalRelease": "2026-12-01T00:00:00Z"})
+assert not b._streaming_premiere({})
+assert b.watch_detail({"release_on": "2026-10-16", "streaming": True}) == {"release_on": "2026-10-16", "premiere": "streaming"}
+print("streaming premiere: PASS")
+
+# --- release day: hold until a grab is queued, not until the gate flips ------
+from datetime import timedelta
+iso = lambda secs_ago: (datetime.now(timezone.utc) - timedelta(seconds=secs_ago)).isoformat()
+assert b.release_day_action({}, queued=False) == "first"                      # gate just flipped
+assert b.release_day_action({}, queued=True) == "handoff"                     # RSS beat us to it
+assert b.release_day_action({"released_at": iso(600), "release_nudged": iso(600)}, False) == "wait"
+assert b.release_day_action({"released_at": iso(4 * 3600), "release_nudged": iso(4 * 3600)}, False) == "nudge"
+assert b.release_day_action({"released_at": iso(4 * 3600), "release_nudged": iso(60)}, False) == "wait"
+assert b.release_day_action({"released_at": iso(25 * 3600), "release_nudged": iso(60)}, False) == "handoff"
+assert b.release_day_action({"released_at": iso(4 * 3600)}, True) == "handoff"
+today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+assert b._just_released({"release_on": today})
+assert b._just_released({"release_on": (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")})
+assert not b._just_released({"release_on": "2026-01-01"})
+assert not b._just_released({"release_on": None})
+print("release day hold: PASS")
+
+# --- a show that has not premiered: tray reads the premiere date ------------
+pre = [ep(1, "2026-10-16T07:00:00Z", False, season=1), ep(2, "2026-10-16T07:00:00Z", False, season=1)]
+plan = b._tv_watch_plan(pre, 1, now=now)
+assert plan["detail"]["premiere_on"] == "2026-10-16" and plan["detail"]["episodes"] == "0/2"
+assert not plan["complete"]
+assert b._tv_watch_plan(eps, 2, now=now)["detail"]["premiere_on"] is None      # E1 on disk: already running
+assert b._tv_watch_plan([], 1, now=now)["detail"]["premiere_on"] is None       # no episodes listed yet
+print("tv premiere: PASS")
+
 print("ALL PASS")
