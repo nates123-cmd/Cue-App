@@ -1980,9 +1980,17 @@ def process(req):
             # out (or a real copy is already on disk) there is nothing to wait
             # for, so fall through to the auto path below.
             st = watch_movie_state(rid)
-            if st is not None and not st["available"] and not st["real_file"]:
+            fresh = st is not None and st["available"] and _just_released(st)
+            if st is not None and not st["real_file"] and (not st["available"] or fresh):
                 d.update(watch_detail(st))
                 d["watch_since"] = _now_iso()
+                if fresh:
+                    # Out today: the gate has flipped but the WEB copy may be
+                    # hours away. Search once and park on release-day watching
+                    # rather than letting the escalator page in 30 minutes.
+                    d["released_at"] = d["release_nudged"] = d["watch_since"]
+                    arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [rid]})
+                    return "watching", "%s -- out today, looking for the WEB copy" % msg, d
                 if st.get("rip_held"):
                     tg("%s: a theater rip is on disk. Holding it back and waiting for "
                        "the WEB copy (%s)." % (label, st.get("release_on") or "no date yet"),
@@ -2336,6 +2344,19 @@ def monitor_downloads():
 WATCH_NO_DATE_DAYS = int(os.environ.get("WATCH_NO_DATE_DAYS", "45"))   # in cinemas this long with no digital date -> say so
 WATCH_EP_GRACE = int(os.environ.get("WATCH_EP_GRACE", "21600"))       # secs an aired episode may be missing before a nudge search
 
+# Release day. Radarr's gate flips at 00:00 UTC on the digital date, which is
+# 8pm the evening BEFORE in New York, and a Netflix/Apple/Prime original drops
+# hours after that (Netflix: 3am ET). The WEB rip follows an hour or several
+# later. Handing the row to the normal pipeline the moment the gate flipped
+# meant a false "out now, grabbing" ping, an empty search, and the stuck
+# escalator paging at 30m, 2h and 6h before any copy could possibly exist. So
+# a flipped movie stays 'watching' ("released, looking for the WEB copy"),
+# re-searches every WATCH_RELEASE_NUDGE, and moves to 'added' the moment a
+# grab is in Radarr's queue -- or after WATCH_RELEASE_GRACE with nothing, at
+# which point the normal escalator is the right tool.
+WATCH_RELEASE_NUDGE = int(os.environ.get("WATCH_RELEASE_NUDGE", "10800"))   # 3h between release-day searches
+WATCH_RELEASE_GRACE = int(os.environ.get("WATCH_RELEASE_GRACE", "86400"))   # released this long, no copy -> normal pipeline
+
 # Words in a release/file name that mean "filmed off a screen or ripped from a
 # cinema package", none of which Nate wants to keep. Matched as whole tokens on
 # the dot/dash/space-split name, so "TS" cannot hit inside "ARTS".
@@ -2359,6 +2380,43 @@ def _movie_release_on(movie):
         if isinstance(v, str) and len(v) >= 10:
             days.append(v[:10])
     return min(days) if days else None
+
+
+def _streaming_premiere(movie):
+    """True for a streaming original: a digital date and no cinema or disc date.
+
+    TMDB lists a Netflix/Apple/Prime film's premiere as its digital release and
+    nothing else ("Norm: The Tale of Norm Macdonald", Netflix, 2026-10-16). Used
+    only for wording -- the gate and the grab are the same as any movie.
+    """
+    return bool(movie.get("digitalRelease")) and not movie.get("inCinemas") \
+        and not movie.get("physicalRelease")
+
+
+def release_day_action(d, queued):
+    """Pure: what a watched movie whose availability gate has flipped does this tick.
+
+    'handoff' -> move to 'added' (a grab is in the queue, or the grace ran out)
+    'first'   -> just flipped: stamp it, search, one Telegram
+    'nudge'   -> another search, it has been WATCH_RELEASE_NUDGE
+    'wait'    -> nothing; RSS is on it
+    """
+    if queued:
+        return "handoff"
+    rel = d.get("released_at")
+    if not rel:
+        return "first"
+    if _age_secs(rel) > WATCH_RELEASE_GRACE:
+        return "handoff"
+    if _age_secs(d.get("release_nudged") or rel) > WATCH_RELEASE_NUDGE:
+        return "nudge"
+    return "wait"
+
+
+def _just_released(st):
+    """Out today or yesterday (UTC): too fresh for a WEB copy to be a given."""
+    n = _days_since(st.get("release_on"))
+    return n is not None and 0 <= n <= 1
 
 
 def _days_since(iso_day):
@@ -2386,6 +2444,7 @@ def watch_movie_state(arr_id):
     st = {"arr_id": arr_id, "title": m.get("title"), "monitored": bool(m.get("monitored")),
           "available": bool(m.get("isAvailable")), "has_file": bool(m.get("hasFile")),
           "release_on": _movie_release_on(m), "in_cinemas": (m.get("inCinemas") or "")[:10] or None,
+          "streaming": _streaming_premiere(m),
           "real_file": False, "rip_held": False}
     if not st["has_file"]:
         return st
@@ -2410,6 +2469,8 @@ def watch_movie_state(arr_id):
 def watch_detail(st):
     """The keys Cue's tray reads off a watching movie row."""
     d = {"release_on": st.get("release_on")}
+    if st.get("streaming"):
+        d["premiere"] = "streaming"
     if st.get("rip_held"):
         d["rip_held"] = True
     return d
@@ -2469,6 +2530,9 @@ def _tv_watch_plan(eps, season, now=None):
     else:
         detail["next_ep"] = None
         detail["next_air"] = None
+    # Nothing aired yet: a new show (or season) that has not premiered. The
+    # tray says "Premieres Oct 16" instead of counting 0/8.
+    detail["premiere_on"] = detail["next_air"] if unaired and not on_disk and not missing else None
     return {"on_disk": sorted(on_disk), "missing": missing, "unaired": unaired,
             "total": total, "detail": detail, "tag": tag,
             "complete": bool(total) and not missing and not unaired}
@@ -2489,7 +2553,7 @@ def monitor_watching():
                     "&select=id,title,media_type,status,detail,tmdb_id,year,rec_id,season&limit=100")
     if code != 200 or not rows:
         return
-    qidx = None
+    qidx = rqidx = None
     for r in rows:
         d = _detail_dict(r)
         mt = r["media_type"]
@@ -2532,15 +2596,30 @@ def monitor_watching():
                     d["pct"] = 100
                     leg = {"state": "downloaded"}
                 elif st["available"]:
-                    # The gate flipped. Hand the row to the normal pipeline;
-                    # Radarr's RSS is already on it, and one explicit search
-                    # closes the gap between RSS runs.
-                    new_status = "added"
-                    d["watch_released"] = _now_iso()
-                    d.pop("stuck_since", None)
-                    arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [arr_id]})
-                    tg("%s is out digitally. Grabbing the WEB copy now." % r.get("title"),
-                       key="released:%s" % arr_id)
+                    # The gate flipped. Stay here until a grab is actually in
+                    # Radarr's queue (see WATCH_RELEASE_NUDGE above): RSS is on
+                    # it, and a search now and then closes the gap between runs.
+                    if rqidx is None:
+                        rqidx = _queue_index(RADARR, "movieId")
+                    act = release_day_action(d, arr_id in rqidx)
+                    if act == "handoff":
+                        new_status = "added"
+                        d["watch_released"] = _now_iso()
+                        d.pop("stuck_since", None)
+                        if arr_id not in rqidx:
+                            log("watch: %s released at %s with no copy yet, handing to the pipeline"
+                                % (r.get("title"), d.get("released_at")))
+                    elif act in ("first", "nudge"):
+                        d["release_nudged"] = _now_iso()
+                        if act == "first":
+                            d["released_at"] = d["release_nudged"]
+                        changed = True
+                        arr(RADARR, "POST", "command", {"name": "MoviesSearch", "movieIds": [arr_id]})
+                        if act == "first":
+                            what = ("premieres today" if st.get("streaming")
+                                    else "is out digitally")
+                            tg("%s %s. Grabbing the WEB copy as soon as one is posted."
+                               % (r.get("title"), what), key="released:%s" % arr_id)
                 elif not st["release_on"]:
                     since = _days_since(st.get("in_cinemas"))
                     if since is not None and since >= WATCH_NO_DATE_DAYS and not d.get("no_date_told"):
