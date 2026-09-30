@@ -4,7 +4,7 @@ import { editionForHour, formatClock, PARTNER } from './lib/meta'
 import { initialFulfillment } from './lib/fulfillment'
 import { useItems, pushTarget, toSeason } from './lib/items'
 import { supabase } from './lib/supabase'
-import { backfillMissingImages } from './lib/backfill'
+import { backfillMissingImages, enrichCaptured } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
 import { CaptureSheet } from './components/CaptureSheet'
@@ -55,11 +55,13 @@ export default function App() {
     if (loading || items.length === 0) return
     backfillRanRef.current = true
     ;(async () => {
+      // Titles captured outside the app ("cue: Gone Girl") first: every load.
+      const captured = await enrichCaptured(items)
       const updated = await backfillMissingImages(items, {
         onProgress: (p) => setBackfillStatus(p),
       })
       setBackfillStatus(null)
-      if (updated > 0) await reload()
+      if (captured + updated > 0) await reload()
     })()
   }, [loading, items, reload])
 

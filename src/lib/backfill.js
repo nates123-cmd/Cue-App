@@ -97,6 +97,7 @@ export async function backfillMissingImages(items, opts = {}) {
   // genre. We only act on items where at least one of those gaps exists.
   const candidates = items.filter((i) => {
     if (i._source !== 'rec') return false
+    if (i.extension?.needs_enrich) return false // enrichCaptured() owns these
     if (!['book', 'tv', 'movie', 'article', 'video', 'podcast', 'music'].includes(i.type)) return false
     const noImage = !i.image_url
     const noSynopsis = !i.enrichment?.synopsis || !i.enrichment.synopsis.trim()
@@ -112,26 +113,7 @@ export async function backfillMissingImages(items, opts = {}) {
   for (let n = 0; n < candidates.length; n++) {
     const item = candidates[n]
     onProgress && onProgress({ index: n + 1, total: candidates.length, title: item.title })
-
-    // Pass 1: source provider.
-    const src = await lookupFor(item.type, item.title)
-    const { patch, mergedExt, mergedSynopsis } = patchFromSource(item, src, item.type)
-
-    // Pass 2: Claude fills only what's STILL missing after the source pass.
-    const stillNoSynopsis = !mergedSynopsis || !mergedSynopsis.trim()
-    const stillNoGenre = !mergedExt.genre
-    if (stillNoSynopsis || stillNoGenre) {
-      const c = await claudeSynopsisAndGenre(item.type, item.title)
-      if (c) {
-        if (stillNoSynopsis && c.synopsis) patch.summary = c.synopsis
-        if (stillNoGenre && c.genre) {
-          const ext = patch.extension || { ...mergedExt }
-          ext.genre = c.genre
-          patch.extension = ext
-        }
-      }
-    }
-
+    const patch = await enrichPatch(item)
     if (Object.keys(patch).length === 0) continue
     const { error } = await supabase
       .from('recommendations')
@@ -141,5 +123,50 @@ export async function backfillMissingImages(items, opts = {}) {
   }
 
   if (typeof localStorage !== 'undefined') localStorage.setItem(FLAG, String(Date.now()))
+  return updated
+}
+
+// Both passes for one item. Returns the patch to write (possibly empty).
+async function enrichPatch(item) {
+  // Pass 1: source provider.
+  const src = await lookupFor(item.type, item.title)
+  const { patch, mergedExt, mergedSynopsis } = patchFromSource(item, src, item.type)
+
+  // Pass 2: Claude fills only what's STILL missing after the source pass.
+  const stillNoSynopsis = !mergedSynopsis || !mergedSynopsis.trim()
+  const stillNoGenre = !mergedExt.genre
+  if (stillNoSynopsis || stillNoGenre) {
+    const c = await claudeSynopsisAndGenre(item.type, item.title)
+    if (c) {
+      if (stillNoSynopsis && c.synopsis) patch.summary = c.synopsis
+      if (stillNoGenre && c.genre) {
+        const ext = patch.extension || { ...mergedExt }
+        ext.genre = c.genre
+        patch.extension = ext
+      }
+    }
+  }
+  return patch
+}
+
+// Items added OUTSIDE the app (the capture router: "cue: Gone Girl" from Apple
+// Reminders or the watch) arrive as a bare title with
+// `extension.needs_enrich = true`. Enrichment is client-side only (TMDB / Open
+// Library / the JWT-gated claude fn), so the server cannot do it; instead each
+// load enriches whatever is flagged. Unlike the one-shot backfill above there
+// is no localStorage gate: the flag is the gate, and it is cleared once the
+// item has been tried, found or not, so a title no source knows is not
+// retried on every open.
+export async function enrichCaptured(items) {
+  const flagged = items.filter((i) => i._source === 'rec' && i.extension?.needs_enrich)
+  let updated = 0
+  for (const item of flagged) {
+    const patch = await enrichPatch(item)
+    const ext = { ...(patch.extension || item.extension || {}) }
+    delete ext.needs_enrich
+    patch.extension = ext
+    const { error } = await supabase.from('recommendations').update(patch).eq('id', item.id)
+    if (!error) updated++
+  }
   return updated
 }
