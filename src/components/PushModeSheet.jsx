@@ -115,7 +115,7 @@ export function OptionList({ row, options, onPicked, compact = false }) {
           >
             <span style={{ display: 'flex', gap: 8, alignItems: 'baseline', minWidth: 0 }}>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', flexShrink: 0,
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.1em', flexShrink: 0,
                 color: chosen ? 'var(--ink)' : 'var(--muted)',
               }}>{i + 1}</span>
               <span style={{
@@ -124,7 +124,7 @@ export function OptionList({ row, options, onPicked, compact = false }) {
               }}>{o.title}</span>
             </span>
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase',
+              fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.1em', textTransform: 'uppercase',
               color: chosen ? 'var(--ink)' : o.ok ? 'var(--text-soft)' : 'var(--signal)',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
@@ -254,14 +254,14 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
           <Mono size={9} dim>Push to {arrName}</Mono>
-          <button onClick={onClose} disabled={phase === 'sending'} style={{ ...btnGhost, padding: '3px 8px', fontSize: 9 }}>
+          <button onClick={onClose} disabled={phase === 'sending'} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>
             {phase === 'options' || phase === 'waiting' ? 'Pick later' : 'Close'}
           </button>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{
-            fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 22, lineHeight: 1.1,
+            fontFamily: 'var(--display)', fontWeight: 700, fontSize: 22, lineHeight: 1.1,
             color: 'var(--text)',
           }}>{heading}</div>
           <div style={{
@@ -281,7 +281,7 @@ export const PushModeSheet = ({ pending, onSubmit, onClose }) => {
                 display: 'flex', flexDirection: 'column', gap: 3,
               }}>
                 <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 10.5, letterSpacing: '0.14em',
+                  fontFamily: 'var(--ui)', fontSize: 10.5, letterSpacing: '0.14em',
                   textTransform: 'uppercase', fontWeight: 600,
                 }}>{m.title}</span>
                 <span style={{ fontFamily: 'var(--body)', fontSize: 12, lineHeight: 1.4, color: 'var(--text-soft)' }}>

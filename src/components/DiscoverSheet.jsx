@@ -117,7 +117,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
           <Mono size={9} dim>{unreleased ? 'Not out yet' : 'From the feed'}</Mono>
-          <button onClick={onClose} style={{ ...btnGhost, padding: '3px 8px', fontSize: 9 }}>Close</button>
+          <button onClick={onClose} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Close</button>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '92px 1fr', gap: 14, alignItems: 'start' }}>
@@ -133,7 +133,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
               <Mono size={9} dim>{meta}</Mono>
             </div>
             <div style={{
-              fontFamily: 'var(--display)', fontStyle: 'italic',
+              fontFamily: 'var(--display)', fontWeight: 700,
               fontSize: 22, lineHeight: 1.1, color: 'var(--text)', textWrap: 'balance',
             }}>{entry.title}</div>
             {score != null && (
@@ -154,7 +154,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
               rel="noopener noreferrer"
               style={{
                 ...btnGhost, alignSelf: 'flex-start', marginTop: 1,
-                padding: '4px 9px', fontSize: 8.5, textDecoration: 'none',
+                padding: '6px 10px', fontSize: 12, textDecoration: 'none',
                 display: 'inline-flex', alignItems: 'center', gap: 5,
                 color: 'var(--text-soft)',
               }}
@@ -182,7 +182,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {providers.map((p) => (
                   <span key={p} style={{
-                    fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.08em',
+                    fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.08em',
                     color: 'var(--text-soft)', padding: '3px 7px', borderRadius: 2,
                     border: '1px solid var(--hairline-strong)',
                   }}>{p}</span>

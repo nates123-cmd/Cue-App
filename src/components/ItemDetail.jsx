@@ -3,10 +3,10 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Cover, Mono, RatingPicker, RottenScore, Spine, WatchOn,
-  btnGhost, btnPrimary, btnTextChip,
+  Cover, Mono, PickCard, RatingDots, RatingPicker, RottenScore, WatchOn,
+  btnGhost, btnPrimary, btnTextChip, posterFrame,
 } from './primitives'
-import { ratingTone } from '../lib/meta'
+import { metaFor, ratingTone } from '../lib/meta'
 import { RecommenderPicker } from './RecommenderPicker'
 import { EditableField } from './EditableField'
 import { enrich, pickSeason, seasonsFor } from '../lib/enrichment'
@@ -91,7 +91,7 @@ const InsightList = ({ item, readOnly, onPatch }) => {
       ) : (
         <button
           onClick={() => setAdding(true)}
-          style={{ ...btnGhost, marginTop: list.length ? 8 : 0, padding: '4px 9px', fontSize: 9 }}
+          style={{ ...btnGhost, marginTop: list.length ? 8 : 0, padding: '6px 10px', fontSize: 12 }}
         >+ Add insight</button>
       ))}
     </div>
@@ -103,12 +103,9 @@ const InsightList = ({ item, readOnly, onPatch }) => {
 const GenreChip = ({ genre }) => (
   <span style={{
     alignSelf: 'flex-start',
-    padding: '2px 8px', borderRadius: 2,
-    background: 'color-mix(in oklab, var(--signal) 14%, transparent)',
-    color: 'var(--signal)',
-    fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.18em',
-    textTransform: 'uppercase',
-    border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
+    padding: '4px 8px', borderRadius: 3,
+    background: 'var(--paper-soft)', color: 'var(--text-soft)',
+    fontFamily: 'var(--ui)', fontSize: 12, fontWeight: 500,
   }}>{genre}</span>
 )
 
@@ -147,13 +144,13 @@ const FulfillmentPanel = ({ item }) => {
           }} />
           <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 9.5, letterSpacing: '0.11em',
+              fontFamily: 'var(--ui)', fontSize: 9.5, letterSpacing: '0.11em',
               textTransform: 'uppercase',
               color: b.tone === 'fail' ? 'var(--signal)' : 'var(--text)',
             }}>{b.label}</span>
             {b.title && b.title !== b.label && (
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)',
+                fontFamily: 'var(--ui)', fontSize: 9, color: 'var(--muted)',
                 overflowWrap: 'anywhere',
               }}>{b.title}</span>
             )}
@@ -173,12 +170,7 @@ const TogetherRow = ({ item, partner, onToggle }) => {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 12px',
-      border: '1px solid var(--hairline)', borderRadius: 3,
-      background: isShared
-        ? 'color-mix(in oklab, var(--signal) 8%, transparent)'
-        : 'color-mix(in oklab, var(--paper) 50%, transparent)',
-      transition: 'background 240ms ease',
+      paddingTop: 10, borderTop: '1px solid var(--hairline)',
     }}>
       <div style={{
         width: 26, height: 26, borderRadius: '50%',
@@ -187,7 +179,7 @@ const TogetherRow = ({ item, partner, onToggle }) => {
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       }}>
         <span style={{
-          fontFamily: 'var(--display)', fontStyle: 'italic',
+          fontFamily: 'var(--note)', fontStyle: 'italic',
           fontSize: 18, lineHeight: 1,
           color: isShared ? 'var(--signal)' : 'var(--muted)',
         }}>&amp;</span>
@@ -195,12 +187,12 @@ const TogetherRow = ({ item, partner, onToggle }) => {
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Mono size={9} dim>Together</Mono>
         <div style={{
-          fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 15,
+          fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 15,
           color: isShared ? 'var(--text)' : 'var(--muted)',
         }}>{summary}</div>
       </div>
       <button onClick={() => onToggle && onToggle(item)} style={{
-        ...btnGhost, padding: '6px 10px', fontSize: 9,
+        ...btnGhost, padding: '6px 10px', fontSize: 12,
         background: isShared ? 'var(--text)' : 'transparent',
         color: isShared ? 'var(--ink)' : 'var(--text)',
         borderColor: isShared ? 'var(--text)' : 'var(--hairline-strong)',
@@ -222,7 +214,7 @@ const TagEditor = ({ tags = [], onChange }) => {
       {tags.map((t) => (
         <span key={t} onClick={() => onChange(tags.filter((x) => x !== t))} style={{
           cursor: 'pointer',
-          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 6px',
+          fontFamily: 'var(--ui)', fontSize: 9, padding: '2px 6px',
           borderRadius: 2, background: 'var(--paper)', color: 'var(--text-soft)',
           border: '1px solid var(--hairline)',
         }}>#{t} <span style={{ opacity: 0.5, marginLeft: 2 }}>×</span></span>
@@ -242,19 +234,27 @@ const TagEditor = ({ tags = [], onChange }) => {
             width: 80, padding: '2px 6px', borderRadius: 2,
             background: 'var(--paper-soft)', color: 'var(--text)',
             border: '1px solid var(--signal)',
-            fontFamily: 'var(--mono)', fontSize: 9,
+            fontFamily: 'var(--ui)', fontSize: 9,
           }}
         />
       ) : (
         <button onClick={() => setAdding(true)} style={{
           appearance: 'none', cursor: 'pointer',
-          fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 6px',
+          fontFamily: 'var(--ui)', fontSize: 9, padding: '2px 6px',
           borderRadius: 2, background: 'transparent', color: 'var(--muted)',
           border: '1px dashed var(--hairline-strong)',
         }}>+ tag</button>
       )}
     </div>
   )
+}
+
+// "Saved Sep 12" -- when the pick landed, for the staff-pick band.
+const pickDate = (iso) => {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return `Saved ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 }
 
 export const ItemDetail = ({
@@ -374,48 +374,53 @@ export const ItemDetail = ({
         position: 'fixed', left: 0, right: 0, bottom: 0, top: 70, zIndex: 90,
         background: 'var(--ink)',
         borderTop: '1px solid var(--hairline-strong)',
-        borderTopLeftRadius: 16, borderTopRightRadius: 16,
-        boxShadow: '0 -20px 60px rgba(0,0,0,0.5)',
+        borderTopLeftRadius: 10, borderTopRightRadius: 10,
         overflowY: 'auto', animation: 'sheet-in 320ms cubic-bezier(0.2,0.7,0.2,1)',
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8 }}>
           <div style={{ width: 38, height: 3, borderRadius: 2, background: 'var(--hairline-strong)' }} />
         </div>
-        <div style={{ padding: '14px 20px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Spine type={item.type} year={ext.published_year || ext.release_year} />
-          <button onClick={onClose} style={{ ...btnGhost, padding: '4px 9px', fontSize: 9 }}>Close</button>
+        <div style={{ padding: '12px 20px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Mono size={9.5} dim>{metaFor(item.type).label}</Mono>
+          <button onClick={onClose} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Close</button>
         </div>
         <div style={{ padding: '0 20px 32px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <div style={{
-            aspectRatio: '5 / 3', borderRadius: 4, overflow: 'hidden',
-            border: '1px solid var(--hairline)', containerType: 'inline-size',
-            boxShadow: '0 24px 50px -24px rgba(0,0,0,0.7)',
-          }}>
-            <Cover item={item} />
-          </div>
-          <div>
-            {readOnly ? (
-              <div style={{
-                fontFamily: 'var(--display)', fontSize: 32, lineHeight: 1.05, letterSpacing: '-0.018em',
-                color: 'var(--text)', textWrap: 'balance', fontWeight: 400,
-              }}>{item.title}</div>
-            ) : (
-              <EditableField
-                value={item.title}
-                onSave={(v) => onPatch && onPatch(item, { title: v })}
-                placeholder="title"
-                displayStyle={{
-                  fontFamily: 'var(--display)', fontSize: 32, lineHeight: 1.05, letterSpacing: '-0.018em',
-                  color: 'var(--text)', textWrap: 'balance', fontWeight: 400,
+          {/* Letterboxd film page: the poster is the object, title and facts beside it. */}
+          <div style={{ display: 'grid', gridTemplateColumns: '108px 1fr', gap: 16, alignItems: 'start' }}>
+            <div style={{ ...posterFrame, aspectRatio: '2 / 3' }}>
+              <Cover item={item} />
+              <span aria-hidden style={{
+                position: 'absolute', inset: 0, borderRadius: 3, pointerEvents: 'none',
+                boxShadow: 'inset 0 0 0 1px color-mix(in oklab, var(--text) 16%, transparent)',
+              }} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              {readOnly ? (
+                <div style={{
+                  fontFamily: 'var(--display)', fontWeight: 700, fontSize: 26, lineHeight: 1.08, letterSpacing: '-0.015em',
+                  color: 'var(--text)', textWrap: 'balance',
+                }}>{item.title}</div>
+              ) : (
+                <EditableField
+                  value={item.title}
+                  onSave={(v) => onPatch && onPatch(item, { title: v })}
+                  placeholder="title"
+                  displayStyle={{
+                  fontFamily: 'var(--display)', fontWeight: 700, fontSize: 26, lineHeight: 1.08, letterSpacing: '-0.015em',
+                  color: 'var(--text)', textWrap: 'balance',
                 }}
-                editStyle={{
-                  fontFamily: 'var(--display)', fontSize: 32, lineHeight: 1.05, letterSpacing: '-0.018em',
-                  color: 'var(--text)', fontWeight: 400,
+                  editStyle={{
+                  fontFamily: 'var(--display)', fontWeight: 700, fontSize: 26, lineHeight: 1.08, letterSpacing: '-0.015em',
+                  color: 'var(--text)', textWrap: 'balance',
                 }}
-              />
-            )}
-            <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>
-              {meta.filter(Boolean).join(' · ')}
+                />
+              )}
+              <div style={{ marginTop: 8, fontFamily: 'var(--ui)', fontSize: 13, lineHeight: 1.45, color: 'var(--muted)' }}>
+                {meta.filter(Boolean).join(' · ')}
+              </div>
+              {item.rating ? (
+                <div style={{ marginTop: 10 }}><RatingDots rating={item.rating} size={7} /></div>
+              ) : null}
             </div>
           </div>
 
@@ -431,7 +436,7 @@ export const ItemDetail = ({
                   width: 6, height: 6, borderRadius: '50%', background: 'var(--signal)',
                   animation: enriching ? 'pulse-now 1s ease-in-out infinite' : 'none',
                 }} />
-                {enriching ? 'Enriching…' : '✦ Enrich — cover + where to watch'}
+                {enriching ? 'Enriching…' : 'Enrich: cover + where to watch'}
               </button>
             )}
             {onMoreLikeThis && (
@@ -485,7 +490,7 @@ export const ItemDetail = ({
             {ext.genre && <GenreChip genre={ext.genre} />}
             {readOnly ? (
               item.enrichment?.synopsis && (
-                <p style={{ margin: 0, fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text-soft)', textWrap: 'pretty' }}>
+                <p style={{ margin: 0, fontFamily: 'var(--read)', fontSize: 16, lineHeight: 1.55, color: 'var(--text-soft)', textWrap: 'pretty' }}>
                   {item.enrichment.synopsis}
                 </p>
               )
@@ -496,11 +501,11 @@ export const ItemDetail = ({
                 placeholder="add a synopsis…"
                 multiline
                 displayStyle={{
-                  fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6,
+                  fontFamily: 'var(--read)', fontSize: 16, lineHeight: 1.55,
                   color: 'var(--text-soft)', textWrap: 'pretty',
                 }}
                 editStyle={{
-                  fontFamily: 'var(--body)', fontSize: 14.5, lineHeight: 1.6, color: 'var(--text)',
+                  fontFamily: 'var(--read)', fontSize: 16, lineHeight: 1.55, color: 'var(--text)',
                 }}
               />
             )}
@@ -546,13 +551,18 @@ export const ItemDetail = ({
             )}
           </div>
 
-          {/* From + tags */}
+          {/* Whose pick this is -- the Strand staff-pick card. Only the band
+              speaks in the --note italic. */}
+          <PickCard
+            who={item.recommended_by && item.recommended_by !== 'Me' ? `${item.recommended_by}'s pick` : 'Your pick'}
+            when={pickDate(item.created_at)}
+          >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <Mono size={9} dim>From</Mono>
               {readOnly ? (
                 <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+                  fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
                   color: 'var(--text)', borderBottom: '1px dashed var(--hairline-strong)', paddingBottom: 1,
                 }}>{item.recommended_by}</span>
               ) : (
@@ -568,7 +578,7 @@ export const ItemDetail = ({
               {readOnly ? (
                 item.tags?.length ? item.tags.map((t) => (
                   <span key={t} style={{
-                    fontFamily: 'var(--mono)', fontSize: 9, padding: '2px 6px',
+                    fontFamily: 'var(--ui)', fontSize: 9, padding: '2px 6px',
                     borderRadius: 2, background: 'var(--paper)', color: 'var(--text-soft)',
                     border: '1px solid var(--hairline)',
                   }}>#{t}</span>
@@ -580,6 +590,7 @@ export const ItemDetail = ({
           </div>
 
           <TogetherRow item={item} partner={partner} onToggle={readOnly ? undefined : onToggleWith} />
+          </PickCard>
 
           {/* Review: rating + your take + the insights it left you with */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -591,7 +602,7 @@ export const ItemDetail = ({
                 size={10}
                 disabled={readOnly}
               />
-              <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
+              <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
                 {ratingTone(item.rating)}
               </span>
             </div>
@@ -601,7 +612,7 @@ export const ItemDetail = ({
                 item.notes ? (
                   <div style={{
                     borderLeft: '2px solid var(--signal)', paddingLeft: 12,
-                    fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 16, lineHeight: 1.4,
+                    fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 16, lineHeight: 1.4,
                     color: 'var(--text)',
                   }}>&ldquo;{item.notes}&rdquo;</div>
                 ) : <Mono size={9} dim>(none)</Mono>
@@ -612,7 +623,7 @@ export const ItemDetail = ({
                   placeholder="your take, after"
                   multiline
                   displayStyle={{
-                    fontFamily: item.notes ? 'var(--display)' : 'var(--body)',
+                    fontFamily: item.notes ? 'var(--note)' : 'var(--body)',
                     fontStyle: item.notes ? 'italic' : 'normal',
                     fontSize: item.notes ? 16 : 14, lineHeight: 1.4,
                     color: item.notes ? 'var(--text)' : 'var(--muted)',
@@ -640,7 +651,7 @@ export const ItemDetail = ({
                     background: i === 0 ? 'var(--text)' : 'transparent',
                     color: i === 0 ? 'var(--ink)' : 'var(--text)',
                     border: `1px solid ${i === 0 ? 'var(--text)' : 'var(--hairline-strong)'}`,
-                    fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.12em',
+                    fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.12em',
                     textTransform: 'uppercase', fontWeight: 500,
                   }}>↗ {l.label}</a>
                 ))}
@@ -707,7 +718,7 @@ const DeleteRow = ({ item, confirmDelete, setConfirmDelete, onDelete, onClose })
           <span style={{
             flex: 1, fontFamily: 'var(--body)', fontSize: 13, color: 'var(--text-soft)',
           }}>Delete <em style={{ color: 'var(--text)' }}>{item.title}</em>?</span>
-          <button onClick={() => setConfirmDelete(false)} style={{ ...btnGhost, padding: '5px 10px', fontSize: 10 }}>
+          <button onClick={() => setConfirmDelete(false)} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>
             Cancel
           </button>
           <button
@@ -715,7 +726,7 @@ const DeleteRow = ({ item, confirmDelete, setConfirmDelete, onDelete, onClose })
               try { await onDelete(item) } finally { onClose && onClose() }
             }}
             style={{
-              ...btnPrimary, padding: '5px 12px', fontSize: 10,
+              ...btnPrimary, padding: '6px 12px', fontSize: 12,
               background: '#c43a2a', color: '#fff', borderColor: '#c43a2a',
             }}
           >Yes, delete</button>
@@ -724,7 +735,7 @@ const DeleteRow = ({ item, confirmDelete, setConfirmDelete, onDelete, onClose })
         <button
           onClick={() => setConfirmDelete(true)}
           style={{
-            ...btnGhost, alignSelf: 'flex-start', padding: '5px 10px', fontSize: 10,
+            ...btnGhost, alignSelf: 'flex-start', padding: '6px 10px', fontSize: 12,
             color: '#c43a2a', borderColor: 'color-mix(in oklab, #c43a2a 40%, transparent)',
           }}
         >Delete this item</button>

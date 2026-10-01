@@ -14,9 +14,11 @@
   --muted: #8a8275;
   --hairline: rgba(240, 232, 216, 0.08);
   --hairline-strong: rgba(240, 232, 216, 0.22);
-  --display: 'Instrument Serif', Georgia, serif;
-  --body: 'Inter Tight', 'Inter', system-ui, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --display: 'Newsreader', Georgia, serif;
+  --body: 'Schibsted Grotesk', system-ui, sans-serif;
+  --ui: 'Schibsted Grotesk', system-ui, sans-serif;
+  --read: 'Newsreader', Georgia, serif;
+  --note: 'Instrument Serif', Georgia, serif;
 
   --bg-canvas: var(--ink);
   --bg-surface: var(--paper);
@@ -28,7 +30,7 @@
   --accent-soft: rgba(236, 90, 42, 0.18);
   --font-display: var(--display);
   --font-body: var(--body);
-  --font-mono: var(--mono);
+  --font-mono: var(--ui);
 }
 
 * { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
@@ -113,7 +115,7 @@ input { font-family: inherit; }
   color: var(--ink-tertiary);
 }
 .auth-title {
-  font-family: var(--font-display); font-weight: 400;
+  font-family: var(--font-display); font-weight: 700;
   font-size: 32px; letter-spacing: -0.02em; font-style: italic;
   margin: 0;
 }

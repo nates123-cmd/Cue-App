@@ -52,10 +52,10 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <Mono size={9} dim>{verb}</Mono>
-          <button onClick={onClose} style={{ ...btnGhost, padding: '3px 8px', fontSize: 9 }}>Cancel</button>
+          <button onClick={onClose} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Cancel</button>
         </div>
         <div style={{
-          fontFamily: 'var(--display)', fontStyle: 'italic',
+          fontFamily: 'var(--display)', fontWeight: 700,
           fontSize: 22, lineHeight: 1.1, color: 'var(--text)',
         }}>{item.title}</div>
 
@@ -63,7 +63,7 @@ export const FinishSheet = ({ open, item, onClose, onConfirm }) => {
           <Mono size={9} dim>How was it?</Mono>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <RatingPicker value={rating} onChange={setRating} size={12} />
-            <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
+            <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, color: 'var(--text-soft)' }}>
               {tone(rating)}
             </span>
           </div>

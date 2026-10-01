@@ -306,22 +306,20 @@ export default function App() {
       <div style={{
         ...groundCfg,
         '--signal': '#ec5a2a',
-        '--display': '"Instrument Serif", Georgia, serif',
-        '--body': '"Inter Tight", "Inter", system-ui, sans-serif',
-        '--mono': '"JetBrains Mono", ui-monospace, monospace',
+        // Four faces, four jobs -- see DESIGN.md. Newsreader bold is the
+        // headline (Letterboxd's Tiempos), Newsreader regular is read at size,
+        // Schibsted Grotesk is every label and control (Letterboxd's Graphik),
+        // Instrument Serif italic is the personal voice and nothing else.
+        '--display': '"Newsreader", Georgia, serif',
+        '--read': '"Newsreader", Georgia, serif',
+        '--body': '"Schibsted Grotesk", system-ui, sans-serif',
+        '--ui': '"Schibsted Grotesk", system-ui, sans-serif',
+        '--note': '"Instrument Serif", Georgia, serif',
         minHeight: '100svh', position: 'relative',
         background: 'var(--ink)', color: 'var(--text)',
         fontFamily: 'var(--body)',
         transition: 'background 600ms ease, color 600ms ease',
       }}>
-        <div style={{
-          position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 1,
-          backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.5 0'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='${resolvedPaper ? '0.18' : '0.30'}'/></svg>")`,
-          mixBlendMode: resolvedPaper ? 'multiply' : 'overlay',
-          opacity: 0.5,
-          transition: 'opacity 600ms ease',
-        }} />
-
         <div style={{ position: 'relative', zIndex: 2, paddingBottom: 120 }}>
           {page === 'recs' && (
             <RecsPage
@@ -362,7 +360,7 @@ export default function App() {
             position: 'fixed', inset: 0, zIndex: 5,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: 'var(--muted)', pointerEvents: 'none',
-            fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.16em',
+            fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.16em',
             textTransform: 'uppercase',
           }}>
             loading library…
@@ -375,7 +373,7 @@ export default function App() {
             top: 'calc(12px + env(safe-area-inset-top, 0px))', zIndex: 40,
             padding: '6px 12px', borderRadius: 999,
             background: 'var(--paper)', border: '1px solid var(--hairline-strong)',
-            color: 'var(--text-soft)', fontFamily: 'var(--mono)', fontSize: 9,
+            color: 'var(--text-soft)', fontFamily: 'var(--ui)', fontSize: 9,
             letterSpacing: '0.14em', textTransform: 'uppercase',
             boxShadow: '0 8px 20px -8px rgba(0,0,0,0.4)',
             maxWidth: 'calc(100vw - 32px)',
@@ -403,9 +401,8 @@ export default function App() {
             padding: '11px 16px',
             background: 'var(--signal)', color: 'var(--ink)',
             border: 0, borderRadius: 999,
-            fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.14em',
-            textTransform: 'uppercase', fontWeight: 600,
-            boxShadow: '0 12px 24px -8px rgba(0,0,0,0.5)',
+            fontFamily: 'var(--ui)', fontSize: 14, fontWeight: 600,
+            boxShadow: '0 10px 20px -10px rgba(0,0,0,0.5)',
             display: 'inline-flex', alignItems: 'center', gap: 6,
           }}>+ Capture</button>
         )}

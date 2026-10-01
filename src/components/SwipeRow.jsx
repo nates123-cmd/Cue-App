@@ -68,7 +68,7 @@ export const SwipeRow = ({
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
             color: past ? '#fff' : 'rgba(255,255,255,0.8)',
-            fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.14em',
+            fontFamily: 'var(--ui)', fontSize: 11, letterSpacing: '0.14em',
             textTransform: 'uppercase', fontWeight: 600,
             transform: `scale(${0.85 + intent * 0.2})`,
             transition: dragging.current ? 'none' : 'transform 200ms ease',

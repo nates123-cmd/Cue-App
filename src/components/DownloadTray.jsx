@@ -65,7 +65,7 @@ function Row({ row, onDelete, onPicked }) {
         position: 'absolute', inset: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
         paddingRight: 16, background: TONE.fail,
-        color: '#fff', fontFamily: 'var(--mono)', fontSize: 9,
+        color: '#fff', fontFamily: 'var(--ui)', fontSize: 9,
         letterSpacing: '0.14em', textTransform: 'uppercase',
         opacity: dx < -6 ? 1 : 0, transition: 'opacity 120ms ease',
       }}>{armed ? 'Release' : 'Delete'}</div>
@@ -90,13 +90,13 @@ function Row({ row, onDelete, onPicked }) {
             {/* Two rows for one show are two seasons, not a bug — say which. */}
             {row.season != null && (
               <span style={{
-                marginLeft: 6, fontFamily: 'var(--mono)', fontSize: 9,
+                marginLeft: 6, fontFamily: 'var(--ui)', fontSize: 9,
                 letterSpacing: '0.1em', color: 'var(--muted)',
               }}>S{row.season}</span>
             )}
           </span>
           <span style={{
-            fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.12em',
+            fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.12em',
             textTransform: 'uppercase', color, whiteSpace: 'nowrap', flexShrink: 0,
           }}>{v.label}</span>
         </div>
@@ -121,7 +121,7 @@ function Row({ row, onDelete, onPicked }) {
         )}
         {(v.tone === 'fail' || v.tone === 'ask' || row.status === 'watching') && v.msg && (
           <div style={{
-            marginTop: 5, fontFamily: 'var(--mono)', fontSize: 9, lineHeight: 1.4,
+            marginTop: 5, fontFamily: 'var(--ui)', fontSize: 9, lineHeight: 1.4,
             color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{v.msg}</div>
         )}
@@ -201,7 +201,7 @@ export function DownloadTray() {
             background: 'var(--signal)', color: 'var(--ink)',
             border: '1.5px solid var(--ink)',
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: 'var(--mono)', fontSize: 8, fontWeight: 700, lineHeight: 1,
+            fontFamily: 'var(--ui)', fontSize: 8, fontWeight: 700, lineHeight: 1,
           }}>{active.length}</span>
         )}
       </button>
@@ -226,12 +226,12 @@ export function DownloadTray() {
             justifyContent: 'space-between',
           }}>
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 9.5, letterSpacing: '0.16em',
+              fontFamily: 'var(--ui)', fontSize: 9.5, letterSpacing: '0.16em',
               textTransform: 'uppercase', color: 'var(--text-soft)',
             }}>Downloads</span>
             {busy && (
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em',
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em',
                 textTransform: 'uppercase', color: 'var(--signal)',
               }}>{active.length} active</span>
             )}
@@ -239,7 +239,7 @@ export function DownloadTray() {
           {rows.length === 0 ? (
             <div style={{
               padding: '18px 14px 22px', borderTop: '1px solid var(--hairline)',
-              fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.08em',
+              fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.08em',
               textTransform: 'uppercase', color: 'var(--muted)', textAlign: 'center',
             }}>Nothing downloading</div>
           ) : (

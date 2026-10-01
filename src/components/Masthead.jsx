@@ -37,36 +37,67 @@ const EditionGlyph = ({ edition, size = 11 }) => {
   )
 }
 
-export const Masthead = ({ kicker, title, right }) => {
+// Three flat dots -- Letterboxd's mark, in Cue's own colours.
+export const CueMark = () => (
+  <span aria-label="Cue" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+    <span aria-hidden style={{ display: 'inline-flex' }}>
+      {['var(--signal)', 'var(--text-soft)', 'var(--muted)'].map((c, i) => (
+        <span key={i} style={{
+          width: 10, height: 10, borderRadius: '50%', background: c, marginLeft: i ? -2 : 0,
+        }} />
+      ))}
+    </span>
+    <span style={{ fontFamily: 'var(--ui)', fontWeight: 700, fontSize: 16, letterSpacing: '-0.01em', color: 'var(--text)' }}>Cue</span>
+  </span>
+)
+
+// Letterboxd profile counters: bold serif numerals over tiny caps labels,
+// hairline between each.
+export const StatRow = ({ stats }) => (
+  <div style={{ display: 'flex', marginTop: 4 }}>
+    {stats.map((st, i) => (
+      <button key={st.label} onClick={st.onClick} disabled={!st.onClick} style={{
+        appearance: 'none', background: 'transparent', border: 0, cursor: st.onClick ? 'pointer' : 'default',
+        padding: i ? '0 13px' : '0 13px 0 0',
+        borderLeft: i ? '1px solid var(--hairline-strong)' : 0,
+        display: 'flex', flexDirection: 'column', alignItems: i ? 'center' : 'flex-start', gap: 5,
+        color: 'var(--text)',
+      }}>
+        <span style={{ fontFamily: 'var(--display)', fontWeight: 700, fontSize: 22, lineHeight: 1 }}>{st.value}</span>
+        <Mono size={8.5} dim style={{ whiteSpace: 'nowrap' }}>{st.label}</Mono>
+      </button>
+    ))}
+  </div>
+)
+
+export const Masthead = ({ kicker, title, right, stats }) => {
   const ed = useEdition()
   return (
     <header style={{
-      padding: 'calc(8px + env(safe-area-inset-top, 0px)) 20px 16px',
-      borderBottom: '1px solid var(--hairline)',
-      display: 'flex', flexDirection: 'column', gap: 6,
+      padding: 'calc(10px + env(safe-area-inset-top, 0px)) 20px 16px',
+      display: 'flex', flexDirection: 'column', gap: 10,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-        <div style={{ minWidth: 0, overflow: 'hidden' }}>
-          <Mono size={9.5} dim style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>{kicker}</Mono>
-        </div>
+        <CueMark />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           <span title={`Cue · ${ed.label} edition · ${ed.timeLabel}`} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            color: 'var(--text-soft)',
-            padding: '3px 6px',
-            border: '1px solid var(--hairline)', borderRadius: 999,
+            display: 'inline-flex', alignItems: 'center', color: 'var(--muted)', padding: '3px 2px',
           }}>
-            <EditionGlyph edition={ed.edition} size={11} />
+            <EditionGlyph edition={ed.edition} size={13} />
           </span>
           <DownloadTray />
           {right}
         </div>
       </div>
-      <h1 style={{
-        margin: 0, fontFamily: 'var(--display)',
-        fontSize: 38, lineHeight: 1, letterSpacing: '-0.025em',
-        color: 'var(--text)', fontStyle: 'italic', fontWeight: 400,
-      }}>{title}</h1>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+        <h1 style={{
+          margin: 0, fontFamily: 'var(--display)',
+          fontSize: 34, lineHeight: 1.02, letterSpacing: '-0.02em',
+          color: 'var(--text)', fontWeight: 700, textWrap: 'balance',
+        }}>{title}</h1>
+        {kicker && <Mono size={9.5} dim>{kicker}</Mono>}
+      </div>
+      {stats && <StatRow stats={stats} />}
     </header>
   )
 }
@@ -102,7 +133,7 @@ export const BottomNav = ({ page, onChange, activeCount }) => {
               {it.id === 'active' && activeCount > 0 && (
                 <span style={{
                   position: 'absolute', top: -3, right: -8,
-                  fontFamily: 'var(--mono)', fontSize: 8.5,
+                  fontFamily: 'var(--ui)', fontSize: 8.5,
                   background: 'var(--signal)', color: 'var(--ink)',
                   padding: '1px 4px 0', borderRadius: 6, fontWeight: 600,
                   minWidth: 12, textAlign: 'center',
@@ -110,7 +141,7 @@ export const BottomNav = ({ page, onChange, activeCount }) => {
               )}
             </span>
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.12em',
+              fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.12em',
               textTransform: 'uppercase',
               color: active ? 'var(--text)' : 'var(--muted)',
             }}>{it.label}</span>

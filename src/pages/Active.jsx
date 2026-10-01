@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Masthead } from '../components/Masthead'
-import { Mono, ProgressCard } from '../components/primitives'
+import { Mono, ProgressCard, btnTextChip } from '../components/primitives'
 import { TypeIcon } from '../components/TypeIcon'
 import { DragList } from '../components/DragList'
 import { shortlistOf } from '../lib/items'
@@ -47,14 +47,8 @@ export const ActivePage = ({ items, onBump, onFinish, onOpenItem, onReorderShort
 
   const chip = (key, label, icon) => (
     <button key={key} onClick={() => setTypeFilter(key)} style={{
-      appearance: 'none', cursor: 'pointer', flexShrink: 0,
+      ...btnTextChip(typeFilter === key), flexShrink: 0,
       display: 'inline-flex', alignItems: 'center', gap: 6,
-      padding: '5px 10px', borderRadius: 999,
-      background: typeFilter === key ? 'color-mix(in oklab, var(--signal) 15%, transparent)' : 'transparent',
-      border: `1px solid ${typeFilter === key ? 'var(--signal)' : 'var(--hairline-strong)'}`,
-      color: typeFilter === key ? 'var(--signal)' : 'var(--muted)',
-      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
-      transition: 'all 140ms ease',
     }}>
       {icon}
       {label}
@@ -64,7 +58,7 @@ export const ActivePage = ({ items, onBump, onFinish, onOpenItem, onReorderShort
   return (
     <div>
       <Masthead
-        kicker={`No. 003 · In progress · ${active.length}`}
+        kicker={`In progress · ${active.length}`}
         title="What we're in the middle of"
       />
       <div style={{ padding: '16px 20px 120px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -75,7 +69,7 @@ export const ActivePage = ({ items, onBump, onFinish, onOpenItem, onReorderShort
           }}>
             <Mono size={10} dim>Nothing currently</Mono>
             <div style={{
-              fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 22,
+              fontFamily: 'var(--display)', fontWeight: 700, fontSize: 22,
               marginTop: 10, color: 'var(--text-soft)',
             }}>Start something from the queue?</div>
           </div>

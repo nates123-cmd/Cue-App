@@ -132,7 +132,7 @@ export const DiscoverRow = ({ row, libraryKeys, onOpen }) => {
     <section ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, paddingRight: 4 }}>
         <h2 style={{
-          margin: 0, fontFamily: 'var(--display)', fontStyle: 'italic',
+          margin: 0, fontFamily: 'var(--display)', fontWeight: 700,
           fontSize: 20, lineHeight: 1, fontWeight: 400, color: 'var(--text)',
         }}>{row.title}</h2>
         <Mono size={8.5} dim style={{ flexShrink: 0 }}>{row.kicker}</Mono>

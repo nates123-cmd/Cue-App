@@ -34,7 +34,7 @@ export const RecommenderPicker = ({ value, onChange, recommenders }) => {
       <button onClick={() => setOpen((o) => !o)} style={{
         appearance: 'none', background: 'transparent', border: 0, cursor: 'pointer',
         padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
-        fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+        fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
         color: 'var(--text)', borderBottom: '1px dashed var(--hairline-strong)',
         paddingBottom: 1,
       }}>
@@ -63,7 +63,7 @@ export const RecommenderPicker = ({ value, onChange, recommenders }) => {
                 textAlign: 'left', padding: '6px 8px', borderRadius: 2,
                 background: value === r ? 'var(--paper-soft)' : 'transparent',
                 color: 'var(--text)', border: 0,
-                fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+                fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
                 display: 'flex', alignItems: 'center', gap: 8,
               }}>
                 <span style={{
@@ -82,7 +82,7 @@ export const RecommenderPicker = ({ value, onChange, recommenders }) => {
               textAlign: 'left', padding: '6px 8px', borderRadius: 2,
               background: 'transparent', color: 'var(--text-soft)',
               border: 0,
-              fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+              fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
               display: 'flex', alignItems: 'center', gap: 8,
             }}>
               <span style={{ fontSize: 12, lineHeight: 0.8 }}>+</span> Add new
@@ -102,11 +102,11 @@ export const RecommenderPicker = ({ value, onChange, recommenders }) => {
                   padding: '6px 8px', borderRadius: 2,
                   background: 'var(--paper-soft)', color: 'var(--text)',
                   border: '1px solid var(--hairline-strong)',
-                  fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+                  fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
                 }}
               />
               <button onClick={commitNew} style={{
-                ...btnPrimary, padding: '5px 9px', fontSize: 9,
+                ...btnPrimary, padding: '6px 10px', fontSize: 12,
                 opacity: draft.trim() ? 1 : 0.3,
                 pointerEvents: draft.trim() ? 'auto' : 'none',
               }}>Add</button>

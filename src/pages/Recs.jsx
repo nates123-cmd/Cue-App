@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Masthead } from '../components/Masthead'
 import { TypeIcon } from '../components/TypeIcon'
 import {
-  Cover, Mono, Spine, WatchOn, btnGhost, btnPrimary,
+  Cover, Mono, Spine, WatchOn, btnGhost, btnPrimary, btnTextChip,
 } from '../components/primitives'
 import { DiscoverRow } from '../components/DiscoverRow'
 import { DiscoverSheet } from '../components/DiscoverSheet'
@@ -31,7 +31,7 @@ function asCoverItem(sug) {
 
 const SourceTag = ({ source }) => (
   <span style={{
-    fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.14em', textTransform: 'uppercase',
+    fontFamily: 'var(--ui)', fontSize: 8, letterSpacing: '0.14em', textTransform: 'uppercase',
     color: 'var(--muted)', border: '1px solid var(--hairline)', borderRadius: 2, padding: '1px 5px',
   }}>{SOURCE_LABEL[source] || source}</span>
 )
@@ -76,7 +76,7 @@ const SuggestionCard = ({ sug, why, whyBusy, onWhy, onConfirm, onDismiss, confir
           </div>
         ) : (
           <button onClick={onWhy} disabled={whyBusy} style={{
-            ...btnGhost, alignSelf: 'flex-start', padding: '3px 8px', fontSize: 8.5,
+            ...btnGhost, alignSelf: 'flex-start', padding: '6px 10px', fontSize: 12,
             opacity: whyBusy ? 0.5 : 0.8, cursor: whyBusy ? 'wait' : 'pointer',
           }}>{whyBusy ? 'thinking…' : '✦ why this'}</button>
         )}
@@ -86,7 +86,7 @@ const SuggestionCard = ({ sug, why, whyBusy, onWhy, onConfirm, onDismiss, confir
             <Mono size={8} dim>on</Mono>
             {sug.availability.slice(0, 4).map((s) => (
               <span key={s} style={{
-                fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.08em',
+                fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.08em',
                 color: 'var(--text-soft)', border: '1px solid var(--hairline-strong)', borderRadius: 2, padding: '1px 5px',
               }}>{s}</span>
             ))}
@@ -94,11 +94,11 @@ const SuggestionCard = ({ sug, why, whyBusy, onWhy, onConfirm, onDismiss, confir
         )}
 
         <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 6, flexWrap: 'wrap' }}>
-          <button onClick={onConfirm} disabled={confirmed} style={{ ...btnPrimary, padding: '6px 12px', fontSize: 9 }}>
+          <button onClick={onConfirm} disabled={confirmed} style={{ ...btnPrimary, padding: '6px 12px', fontSize: 12 }}>
             {confirmed ? 'Queued ✓' : '+ Queue'}
           </button>
           {!confirmed && (
-            <button onClick={onDismiss} style={{ ...btnGhost, padding: '6px 10px', fontSize: 9 }}>Not for me</button>
+            <button onClick={onDismiss} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Not for me</button>
           )}
           {/* Search rather than a resolved trailer: these picks come from
               TasteDive and Claude as often as TMDB, so most carry no tmdb_id to
@@ -109,7 +109,7 @@ const SuggestionCard = ({ sug, why, whyBusy, onWhy, onConfirm, onDismiss, confir
               target="_blank"
               rel="noopener noreferrer"
               style={{
-                ...btnGhost, padding: '6px 10px', fontSize: 9, textDecoration: 'none',
+                ...btnGhost, padding: '6px 10px', fontSize: 12, textDecoration: 'none',
                 display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--text-soft)',
               }}
             >
@@ -142,7 +142,7 @@ const BacklogRow = ({ item, onOpen }) => (
         {item.title}
       </div>
     </div>
-    <span style={{ fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--muted)' }}>open</span>
+    <span style={{ fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--muted)' }}>open</span>
   </div>
 )
 
@@ -311,7 +311,7 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
-      <Masthead kicker="No. 002 · Recommendations" title="What's next?" />
+      <Masthead title="What's next?" />
       <div style={{ padding: '16px 20px 120px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
         {/* The ask */}
@@ -322,7 +322,7 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
                 display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 999,
                 background: 'color-mix(in oklab, var(--signal) 14%, transparent)', color: 'var(--signal)',
                 border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em',
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.1em',
               }}>
                 Like: {seedChip}
                 <button onClick={clearSeed} title="Clear seed" style={{ appearance: 'none', background: 'transparent', border: 0, color: 'inherit', cursor: 'pointer', padding: 0, fontSize: 11 }}>✕</button>
@@ -336,13 +336,13 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
             placeholder={seedChip ? '…but shorter, funnier, etc.' : 'something short and funny tonight…'}
             style={{
               appearance: 'none', border: 0, outline: 0, background: 'transparent',
-              fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 19, color: 'var(--text)', padding: 0,
+              fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 19, color: 'var(--text)', padding: 0,
             }}
           />
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button onClick={onSurprise} disabled={generating} style={{ ...btnGhost, padding: '6px 11px', fontSize: 9 }}>✦ Surprise me</button>
+            <button onClick={onSurprise} disabled={generating} style={{ ...btnGhost, padding: '6px 11px', fontSize: 12 }}>✦ Surprise me</button>
             <span style={{ flex: 1 }} />
-            <button onClick={onAsk} disabled={generating || !query.trim()} style={{ ...btnPrimary, padding: '6px 12px', fontSize: 9, opacity: query.trim() ? 1 : 0.4 }}>Ask ↵</button>
+            <button onClick={onAsk} disabled={generating || !query.trim()} style={{ ...btnPrimary, padding: '6px 12px', fontSize: 12, opacity: query.trim() ? 1 : 0.4 }}>Ask ↵</button>
           </div>
         </div>
 
@@ -354,11 +354,7 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
             ['backlog', `Your queue${backlogItems.length ? ` · ${backlogItems.length}` : ''}`],
           ].map(([v, label]) => (
             <button key={v} onClick={() => setView(v)} style={{
-              appearance: 'none', cursor: 'pointer', padding: '6px 11px', borderRadius: 999,
-              background: view === v ? 'var(--text)' : 'transparent', color: view === v ? 'var(--ink)' : 'var(--muted)',
-              border: `1px solid ${view === v ? 'var(--text)' : 'var(--hairline-strong)'}`,
-              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
-              whiteSpace: 'nowrap', flexShrink: 0,
+              ...btnTextChip(view === v), flexShrink: 0,
             }}>{label}</button>
           ))}
           <span style={{ flex: 1 }} />

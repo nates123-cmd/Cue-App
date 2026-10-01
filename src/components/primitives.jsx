@@ -1,6 +1,8 @@
-// Primitives: covers, cards, pills, spine codes. All consume CSS vars
-// (--ink/--paper/--paper-soft/--signal/--text/--muted/--hairline) set on the
-// app root, so they restyle with the day/night and accent tweaks.
+// Primitives: covers, cards, pills, labels. All consume CSS vars
+// (--ink/--paper/--paper-soft/--signal/--text/--muted/--hairline, and the
+// --display/--read/--ui/--note faces) set on the app root. See DESIGN.md:
+// the poster is the object, chrome recedes (Letterboxd), and who-recommended-it
+// gets a Strand staff-pick card.
 
 import { useState } from 'react'
 import { TypeIcon } from './TypeIcon'
@@ -73,12 +75,82 @@ export function lengthBucket(item) {
 }
 
 // ── atoms ────────────────────────────────────────────────────
+// Small spaced caps in the UI grotesk -- Letterboxd's section-label voice.
+// (Was a monospace; the name stayed so ~100 call sites did not churn.) Grotesk
+// caps read smaller than mono at the same size, hence the +1.
 export const Mono = ({ children, size = 10, dim = false, style = {} }) => (
   <span style={{
-    fontFamily: 'var(--mono)', fontSize: size, letterSpacing: '0.12em',
+    fontFamily: 'var(--ui)', fontSize: size + 1, letterSpacing: '0.08em',
+    fontWeight: 500,
     textTransform: 'uppercase', color: dim ? 'var(--muted)' : 'inherit',
     ...style,
   }}>{children}</span>
+)
+
+// Section heading: spaced caps, a hairline under it, an optional count or
+// action flush right. The one way Cue divides a screen.
+export const SectionHead = ({ title, right, onRight, style = {} }) => (
+  <div style={{
+    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10,
+    paddingBottom: 7, borderBottom: '1px solid var(--hairline-strong)', ...style,
+  }}>
+    <Mono size={10.5} style={{ color: 'var(--text-soft)' }}>{title}</Mono>
+    {right != null && (onRight ? (
+      <button onClick={onRight} style={{
+        appearance: 'none', background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
+        color: 'var(--muted)',
+      }}><Mono size={9.5}>{right}</Mono></button>
+    ) : <Mono size={9.5} dim>{right}</Mono>)}
+  </div>
+)
+
+// The poster frame: 3px corners, a faint light keyline inside, no drop shadow.
+export const posterFrame = {
+  borderRadius: 3, overflow: 'hidden', position: 'relative',
+  background: 'var(--paper)', containerType: 'inline-size',
+}
+const PosterKeyline = () => (
+  <span aria-hidden style={{
+    position: 'absolute', inset: 0, borderRadius: 3, pointerEvents: 'none',
+    boxShadow: 'inset 0 0 0 1px color-mix(in oklab, var(--text) 16%, transparent)',
+  }} />
+)
+
+// Overlapping fan of covers -- the Letterboxd list preview. A collection
+// (everything one person recommended) shown as the objects in it.
+export const PosterStack = ({ items, width = 58, overlap = 0.55, max = 5 }) => {
+  const shown = items.slice(0, max)
+  return (
+    <div style={{ display: 'flex', flex: 'none', width: width + (shown.length - 1) * width * (1 - overlap) }}>
+      {shown.map((it, i) => (
+        <div key={it.id} style={{
+          ...posterFrame, width, flex: 'none', aspectRatio: '2 / 3',
+          marginLeft: i === 0 ? 0 : -width * overlap, zIndex: max - i,
+          boxShadow: i === shown.length - 1 ? 'none' : '5px 0 8px -4px rgba(0,0,0,0.55)',
+        }}>
+          <Cover item={it} />
+          <PosterKeyline />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Strand staff-pick card: a signal band naming whose pick it is, then the
+// card body. Only the band uses the --note italic.
+export const PickCard = ({ who, when, children }) => (
+  <div style={{ background: 'var(--paper)', borderRadius: 3, overflow: 'hidden' }}>
+    <div style={{
+      background: 'var(--signal)', color: 'var(--ink)',
+      padding: '7px 12px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10,
+    }}>
+      <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 20, lineHeight: 1 }}>{who}</span>
+      {when && <Mono size={9} style={{ fontWeight: 600 }}>{when}</Mono>}
+    </div>
+    <div style={{ padding: '12px 12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {children}
+    </div>
+  </div>
 )
 
 export const Spine = ({ type, year, size = 10 }) => (
@@ -134,7 +206,7 @@ export const RatingPicker = ({ value, onChange, size = 12, disabled = false, gap
 
 export const GenrePill = ({ genre }) => (
   <span style={{
-    fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em',
+    fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.1em',
     textTransform: 'uppercase', color: 'var(--text-soft)',
     padding: '2px 7px', borderRadius: 2,
     border: '1px solid var(--hairline-strong)', whiteSpace: 'nowrap',
@@ -146,7 +218,7 @@ export const LengthPill = ({ item, onDark = false }) => {
   if (!s) return null
   return (
     <span style={{
-      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em',
+      fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.1em',
       textTransform: 'uppercase',
       color: onDark ? '#f0e9dd' : 'var(--text-soft)',
       padding: '2px 6px', borderRadius: 2,
@@ -182,7 +254,7 @@ const TypeCover = ({ item }) => {
         <div style={{
           fontFamily: 'var(--display)',
           fontSize: 'clamp(18px, 2.2cqi, 28px)',
-          fontStyle: 'italic', lineHeight: 1.05, letterSpacing: '-0.01em', textWrap: 'balance',
+          fontWeight: 700, lineHeight: 1.05, letterSpacing: '-0.01em', textWrap: 'balance',
         }}>{item.title}</div>
       </div>
       <div style={{ position: 'relative', borderTop: `1px solid ${fg}40`, paddingTop: 8 }}>
@@ -215,7 +287,7 @@ const StripedCover = ({ item }) => {
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 4 }}>
           <div style={{
-            fontFamily: 'var(--display)', fontStyle: 'italic',
+            fontFamily: 'var(--display)', fontWeight: 700,
             fontSize: 'clamp(20px, 2.6cqi, 32px)',
             lineHeight: 1.0, letterSpacing: '-0.01em', textWrap: 'balance',
           }}>{item.title}</div>
@@ -251,7 +323,7 @@ const VideoCover = ({ item }) => {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{
-            fontFamily: 'var(--display)', fontStyle: 'italic',
+            fontFamily: 'var(--display)', fontWeight: 700,
             fontSize: 'clamp(16px, 2.1cqi, 24px)',
             lineHeight: 1.05, letterSpacing: '-0.01em', textWrap: 'balance',
           }}>{item.title}</div>
@@ -308,7 +380,7 @@ export const RottenScore = ({ critics, audience }) => {
           <Mono size={9} dim>{label}</Mono>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
             <span style={{
-              fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 22,
+              fontFamily: 'var(--display)', fontWeight: 700, fontSize: 22,
               lineHeight: 1, color: fresh ? 'var(--signal)' : 'var(--muted)', fontWeight: 400,
             }}>{value}</span>
             <Mono size={9} dim>%</Mono>
@@ -349,7 +421,7 @@ export const WatchOn = ({ services }) => {
             padding: '8px 12px', borderRadius: 2,
             background: i === 0 ? 'var(--paper-soft)' : 'transparent',
             color: 'var(--text)', border: '1px solid var(--hairline-strong)',
-            fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.12em',
+            fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.12em',
             textTransform: 'uppercase', fontWeight: 500,
             display: 'inline-flex', alignItems: 'center', gap: 6,
           }}>
@@ -371,7 +443,7 @@ export const StatusDot = ({ status }) => {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6,
-      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em',
+      fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em',
       textTransform: 'uppercase', color: 'var(--muted)',
     }}>
       <span style={{
@@ -413,7 +485,7 @@ export const FulfillmentPills = ({ item, compact = false, max = null }) => {
         return (
           <span key={b.key} title={b.title} style={{
             display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0,
-            fontFamily: 'var(--mono)', fontSize: compact ? 8.5 : 9,
+            fontFamily: 'var(--ui)', fontSize: compact ? 8.5 : 9,
             letterSpacing: '0.11em', textTransform: 'uppercase',
             color: tone.text, whiteSpace: 'nowrap',
           }}>
@@ -437,102 +509,48 @@ export const SharedMark = ({ item, partner = 'Amanda', size = 9 }) => {
     <span style={{
       display: 'inline-flex', alignItems: 'baseline', gap: 4,
       color: 'var(--signal)',
-      fontFamily: 'var(--mono)', fontSize: size, letterSpacing: '0.12em',
+      fontFamily: 'var(--ui)', fontSize: size, letterSpacing: '0.12em',
       textTransform: 'uppercase', whiteSpace: 'nowrap',
     }}>
       <span style={{
-        fontFamily: 'var(--display)', fontStyle: 'italic',
-        fontSize: size + 4, lineHeight: 0.7, transform: 'translateY(1px)',
+        fontFamily: 'var(--note)', fontStyle: 'italic',
+        fontSize: size + 7, lineHeight: 0.7, transform: 'translateY(2px)',
       }}>&amp;</span>
       <span>{sayUs ? 'us' : partner}</span>
     </span>
   )
 }
 
+// Grid cell: the poster is the object. One quiet row under it -- the rating,
+// the shared "&", a Now mark -- and pipeline pills only when they exist.
+// The title lives on the cover (real art, or the designed cover prints it);
+// it is also the accessible name.
 export const Card = ({ item, onClick }) => {
-  const ext = item.extension || {}
   const isActive = item.status === 'active'
+  const shared = (item.with || []).length > 0
   return (
-    <div onClick={onClick} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }}>
+    <div onClick={onClick} role="button" aria-label={item.title} style={{
+      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+    }}>
       {/* minWidth:0 above and below: a grid item defaults to min-width:auto, so a
           large intrinsic cover image can force its 1fr track wider than the cell. */}
-      <div style={{
-        aspectRatio: '3 / 4', width: '100%', minWidth: 0, background: 'var(--paper)',
-        border: '1px solid var(--hairline)', borderRadius: 4, overflow: 'hidden',
-        position: 'relative',
-        boxShadow: '0 1px 0 rgba(0,0,0,0.4), 0 12px 28px -16px rgba(0,0,0,0.6)',
-        containerType: 'inline-size',
-      }}>
+      <div style={{ ...posterFrame, aspectRatio: '2 / 3', width: '100%', minWidth: 0 }}>
         <Cover item={item} />
-        {formatLengthShort(item) && (
-          <div style={{ position: 'absolute', top: 8, left: 8 }}>
-            <LengthPill item={item} onDark />
-          </div>
-        )}
-        {(item.type === 'movie' || item.type === 'tv') && ext.rt_critics != null && (
-          <div style={{
-            position: 'absolute', bottom: 8, right: 8,
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            padding: '3px 7px', borderRadius: 2,
-            background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.18)',
-            backdropFilter: 'blur(4px)', color: '#f0e9dd',
-            fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.08em', fontWeight: 600,
-          }}>
-            <span style={{
-              width: 6, height: 6, borderRadius: '50%',
-              background: ext.rt_critics >= 60 ? 'var(--signal)' : 'rgba(240,232,216,0.5)',
-            }} />
-            {ext.rt_critics}
-          </div>
-        )}
+        <PosterKeyline />
         {isActive && (
-          <div style={{
-            position: 'absolute', top: 8, right: 8,
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '3px 7px 3px 6px',
-            background: 'var(--signal)', color: 'var(--ink)',
-            borderRadius: 2, fontFamily: 'var(--mono)', fontSize: 8.5,
-            letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 600,
-          }}>
-            <span style={{
-              width: 5, height: 5, borderRadius: '50%', background: 'var(--ink)',
-              animation: 'pulse-now 1.6s ease-in-out infinite',
-            }} />
-            Now
-          </div>
+          <span aria-hidden style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0, height: 3, background: 'var(--signal)',
+          }} />
         )}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--muted)', flexWrap: 'wrap' }}>
-          <div style={{ color: 'var(--text)', opacity: 0.85 }}>
-            <TypeIcon type={item.type} size={13} weight={1.4} />
-          </div>
-          <Mono size={9} dim>{metaFor(item.type).spine}</Mono>
-          <span style={{ width: 1, height: 8, background: 'var(--hairline-strong)' }} />
-          <Mono size={9} dim>{item.recommended_by}</Mono>
-          {(item.with || []).length > 0 && (
-            <>
-              <span style={{ width: 1, height: 8, background: 'var(--hairline-strong)' }} />
-              <SharedMark item={item} />
-            </>
-          )}
-        </div>
-        <div style={{
-          fontFamily: 'var(--display)', fontSize: 18, lineHeight: 1.15,
-          letterSpacing: '-0.005em', color: 'var(--text)', textWrap: 'balance',
-          minWidth: 0, overflowWrap: 'anywhere',
-        }}>{item.title}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
-          <StatusDot status={item.status} />
-          {item.rating && <RatingDots rating={item.rating} />}
-          {ext.genre && (
-            <Mono size={9} dim style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {ext.genre}
-            </Mono>
-          )}
-        </div>
-        <FulfillmentPills item={item} compact max={3} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 10, minWidth: 0 }}>
+        {item.rating ? <RatingDots rating={item.rating} size={5} /> : isActive ? (
+          <Mono size={8.5} style={{ color: 'var(--signal)', fontWeight: 600 }}>Now</Mono>
+        ) : null}
+        <span style={{ flex: 1 }} />
+        {shared && <SharedMark item={item} size={8.5} />}
       </div>
+      <FulfillmentPills item={item} compact max={2} />
     </div>
   )
 }
@@ -577,19 +595,16 @@ export const ProgressCard = ({ item, onBump, onFinish }) => {
     <div style={{
       display: 'grid', gridTemplateColumns: '92px 1fr', gap: 16,
       padding: '14px',
-      background: 'var(--paper)', border: '1px solid var(--hairline)',
-      borderRadius: 4,
-      boxShadow: '0 1px 0 rgba(0,0,0,0.35), 0 16px 36px -20px rgba(0,0,0,0.65)',
+      background: 'var(--paper)',
+      borderRadius: 3,
       position: 'relative', overflow: 'hidden',
     }}>
       <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 2, background: 'var(--signal)' }} />
       <div style={{
-        aspectRatio: '3 / 4', borderRadius: 3, overflow: 'hidden',
-        background: 'var(--ink)',
-        boxShadow: '0 4px 14px -6px rgba(0,0,0,0.7)',
-        containerType: 'inline-size',
+        ...posterFrame, aspectRatio: '2 / 3', alignSelf: 'start',
       }}>
         <Cover item={item} />
+        <PosterKeyline />
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text)' }}>
@@ -599,8 +614,8 @@ export const ProgressCard = ({ item, onBump, onFinish }) => {
           <Mono size={9} dim>{item.recommended_by}</Mono>
         </div>
         <div style={{
-          fontFamily: 'var(--display)', fontSize: 19, lineHeight: 1.15,
-          letterSpacing: '-0.005em', color: 'var(--text)',
+          fontFamily: 'var(--display)', fontWeight: 700, fontSize: 19, lineHeight: 1.15,
+          letterSpacing: '-0.01em', color: 'var(--text)',
           overflow: 'hidden', textOverflow: 'ellipsis',
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
         }}>{item.title}</div>
@@ -639,29 +654,29 @@ export const ProgressCard = ({ item, onBump, onFinish }) => {
 }
 
 // ── button styles ────────────────────────────────────────────
+// Letterboxd buttons: filled blocks, small radius, sentence case in the UI
+// grotesk. No outline-as-button; the signal fill is reserved for the one
+// primary action on a surface.
 export const btnPrimary = {
   appearance: 'none', border: 0, cursor: 'pointer',
-  padding: '8px 14px', borderRadius: 3,
+  padding: '9px 14px', borderRadius: 3,
   background: 'var(--signal)', color: 'var(--ink)',
-  fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.14em',
-  textTransform: 'uppercase', fontWeight: 600,
+  fontFamily: 'var(--ui)', fontSize: 13, fontWeight: 600,
 }
 
 export const btnGhost = {
   appearance: 'none', cursor: 'pointer',
-  padding: '8px 14px', borderRadius: 3,
-  background: 'transparent', color: 'var(--text)',
-  border: '1px solid var(--hairline-strong)',
-  fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.14em',
-  textTransform: 'uppercase', fontWeight: 500,
+  padding: '9px 14px', borderRadius: 3,
+  background: 'var(--paper-soft)', color: 'var(--text)',
+  border: 0,
+  fontFamily: 'var(--ui)', fontSize: 13, fontWeight: 500,
 }
 
 export const btnTextChip = (active) => ({
   appearance: 'none', cursor: 'pointer',
-  padding: '6px 10px', borderRadius: 2,
-  background: active ? 'var(--text)' : 'transparent',
-  color: active ? 'var(--ink)' : 'var(--text)',
-  border: `1px solid ${active ? 'var(--text)' : 'var(--hairline-strong)'}`,
-  fontFamily: 'var(--mono)', fontSize: 9.5, letterSpacing: '0.14em',
-  textTransform: 'uppercase', fontWeight: 500, whiteSpace: 'nowrap',
+  padding: '6px 10px', borderRadius: 3,
+  background: active ? 'var(--text)' : 'var(--paper-soft)',
+  color: active ? 'var(--ink)' : 'var(--text-soft)',
+  border: 0,
+  fontFamily: 'var(--ui)', fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap',
 })

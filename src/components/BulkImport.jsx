@@ -61,7 +61,7 @@ const RowLine = ({ row }) => (
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{row.title}</div>
       {row.status === 'error' && row.error && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 8.5, color: STATUS_COLOR.error, marginTop: 2 }}>
+        <div style={{ fontFamily: 'var(--ui)', fontSize: 8.5, color: STATUS_COLOR.error, marginTop: 2 }}>
           {row.error}
         </div>
       )}
@@ -159,7 +159,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
               appearance: 'none', outline: 0, resize: 'vertical',
               border: '1px solid var(--hairline)', borderRadius: 3,
               background: 'var(--bg)', color: 'var(--text)',
-              fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.6,
+              fontFamily: 'var(--ui)', fontSize: 12.5, lineHeight: 1.6,
               padding: '10px 12px', width: '100%',
             }}
           />
@@ -180,7 +180,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
                 }}>
                   <TypeIcon type={t} size={15} weight={1.4} />
                   <span style={{
-                    fontFamily: 'var(--mono)', fontSize: 8, letterSpacing: '0.12em', textTransform: 'uppercase',
+                    fontFamily: 'var(--ui)', fontSize: 8, letterSpacing: '0.12em', textTransform: 'uppercase',
                   }}>{TYPE_META[t].label}</span>
                 </button>
               ))}
@@ -200,8 +200,8 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
                 color: withPartner ? 'var(--signal)' : 'var(--muted)',
                 transition: 'all 160ms ease',
               }}>
-              <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'inherit' }}>{partner}</span>
+              <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
+              <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'inherit' }}>{partner}</span>
             </button>
             <span style={{ flex: 1 }} />
             <Mono size={9} dim>{preview.length} item{preview.length === 1 ? '' : 's'}</Mono>

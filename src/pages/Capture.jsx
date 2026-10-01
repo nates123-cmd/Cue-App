@@ -23,7 +23,7 @@ export const TypeChip = ({ type, active, onClick }) => (
   }}>
     <TypeIcon type={type} size={18} weight={1.4} />
     <span style={{
-      fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.12em',
+      fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.12em',
       textTransform: 'uppercase', color: active ? 'var(--text)' : 'var(--muted)',
     }}>{TYPE_META[type].label}</span>
   </button>
@@ -56,7 +56,7 @@ export const SeasonPicker = ({ seasons, value = null, busy = false, onPick }) =>
                 background: active ? 'color-mix(in oklab, var(--signal) 16%, transparent)' : 'transparent',
                 border: `1px solid ${active ? 'var(--signal)' : 'var(--hairline-strong)'}`,
                 color: active ? 'var(--signal)' : 'var(--muted)',
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
                 opacity: busy && !active ? 0.5 : 1, transition: 'all 160ms ease',
               }}
             >{label}</button>
@@ -87,7 +87,7 @@ export const Enriching = ({ title }) => (
     </Mono>
     <div style={{
       fontFamily: 'var(--display)', fontSize: 24, lineHeight: 1.15,
-      letterSpacing: '-0.01em', color: 'var(--text)', fontStyle: 'italic',
+      letterSpacing: '-0.01em', color: 'var(--text)', fontWeight: 700,
     }}>{title}</div>
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
       {[60, 90, 75, 40].map((w, i) => (
@@ -167,7 +167,7 @@ export const DraftCard = ({
         </FieldReveal>
         {metaLine && (
           <FieldReveal delay={360}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: '0.02em' }}>
+            <div style={{ fontFamily: 'var(--ui)', fontSize: 11, color: 'var(--muted)', letterSpacing: '0.02em' }}>
               {metaLine}
             </div>
           </FieldReveal>
@@ -180,7 +180,7 @@ export const DraftCard = ({
                 padding: '2px 8px', borderRadius: 2,
                 background: 'color-mix(in oklab, var(--signal) 14%, transparent)',
                 color: 'var(--signal)',
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.18em',
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.18em',
                 textTransform: 'uppercase',
                 border: '1px solid color-mix(in oklab, var(--signal) 30%, transparent)',
               }}>{ext.genre}</span>
@@ -225,7 +225,7 @@ export const DraftCard = ({
                   padding: '5px 9px',
                   border: '1px solid var(--hairline-strong)',
                   borderRadius: 2,
-                  fontFamily: 'var(--mono)', fontSize: 9.5,
+                  fontFamily: 'var(--ui)', fontSize: 9.5,
                   letterSpacing: '0.12em', textTransform: 'uppercase',
                   color: 'var(--text-soft)',
                 }}>↗ {l.label}</span>
@@ -252,7 +252,7 @@ export const DraftCard = ({
                 background: 'transparent', border: 0,
                 borderBottom: '1px dashed var(--hairline-strong)',
                 padding: '4px 0 3px', color: 'var(--text)',
-                fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: '0.04em',
+                fontFamily: 'var(--ui)', fontSize: 10, letterSpacing: '0.04em',
               }}
             />
           </div>
@@ -299,7 +299,7 @@ export const MatchPicker = ({ candidates, pickedKey, busy, showType = false, onP
       <button onClick={onDismiss} disabled={busy} title="Back to search" style={{
         appearance: 'none', cursor: busy ? 'wait' : 'pointer', background: 'transparent',
         border: 0, padding: '2px 4px', color: 'var(--muted)',
-        fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
+        fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase',
         display: 'inline-flex', alignItems: 'center', gap: 4,
       }}>← edit search</button>
     </div>
@@ -340,7 +340,7 @@ export const MatchPicker = ({ candidates, pickedKey, busy, showType = false, onP
             </div>
             <span style={{
               display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4,
-              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.14em', textTransform: 'uppercase',
+              fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.14em', textTransform: 'uppercase',
               color: active ? 'var(--signal)' : 'var(--muted)',
             }}>
               {showType && (

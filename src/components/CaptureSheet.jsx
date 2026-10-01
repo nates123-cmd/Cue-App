@@ -169,11 +169,11 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
         <div style={{ padding: '14px 20px 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{
             padding: '3px 8px', borderRadius: 2, background: 'var(--signal)', color: 'var(--ink)',
-            fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 600,
+            fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', fontWeight: 600,
           }}>Capture</span>
           <Mono size={9} dim>what did you just hear about?</Mono>
           <span style={{ flex: 1 }} />
-          <button onClick={onClose} style={{ ...btnGhost, padding: '4px 8px', fontSize: 9 }}>Close</button>
+          <button onClick={onClose} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Close</button>
         </div>
 
         <div style={{ padding: '6px 20px 32px', overflowY: 'auto', WebkitOverflowScrolling: 'touch', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -184,7 +184,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                 background: mode === m ? 'var(--paper-soft)' : 'transparent',
                 border: `1px solid ${mode === m ? 'var(--signal)' : 'var(--hairline)'}`,
                 color: mode === m ? 'var(--text)' : 'var(--muted)',
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
+                fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase',
               }}>{label}</button>
             ))}
           </div>
@@ -206,7 +206,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                   placeholder="Severance · Past Lives · The Overstory…"
                   style={{
                     appearance: 'none', border: 0, outline: 0, background: 'transparent',
-                    fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 22, lineHeight: 1.2,
+                    fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 22, lineHeight: 1.2,
                     color: 'var(--text)', padding: 0, width: '100%',
                   }}
                 />
@@ -217,8 +217,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                   border: `1px solid ${auto ? 'var(--signal)' : 'var(--hairline)'}`, borderRadius: 3,
                   color: auto ? 'var(--text)' : 'var(--muted)', transition: 'all 160ms ease',
                 }}>
-                  <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 15, lineHeight: 0.8, color: auto ? 'var(--signal)' : 'var(--muted)' }}>✦</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Auto · best match</span>
+                  <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 15, lineHeight: 0.8, color: auto ? 'var(--signal)' : 'var(--muted)' }}>✦</span>
+                  <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase' }}>Auto · best match</span>
                 </button>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
@@ -244,8 +244,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                     border: `1px solid ${withPartner ? 'var(--signal)' : 'var(--hairline-strong)'}`,
                     color: withPartner ? 'var(--signal)' : 'var(--muted)',
                   }}>
-                    <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{partner}</span>
+                    <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
+                    <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{partner}</span>
                   </button>
                   <span style={{ flex: 1 }} />
                   <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>{phase === 'picking' ? 'Searching…' : auto ? 'Match ↵' : 'Enrich ↵'}</button>

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Masthead } from '../components/Masthead'
 import { TypeIcon } from '../components/TypeIcon'
 import {
-  Card, Cover, FulfillmentPills, Mono, RatingDots, SharedMark, StatusDot,
-  btnGhost, btnTextChip, formatLengthShort, lengthBucket,
+  Card, Cover, FulfillmentPills, Mono, PosterStack, RatingDots, SectionHead, SharedMark, StatusDot,
+  btnGhost, btnTextChip, formatLengthShort, lengthBucket, posterFrame,
 } from '../components/primitives'
 import { SwipeRow } from '../components/SwipeRow'
 import { TYPE_META, TYPE_ORDER } from '../lib/meta'
@@ -22,13 +22,10 @@ const LibraryRow = ({ item, onClick, onToggleShortlist }) => {
   if (lenShort) meta.push(lenShort)
   return (
     <div onClick={onClick} style={{
-      display: 'grid', gridTemplateColumns: '54px 1fr auto', gap: 14, alignItems: 'center',
-      padding: '12px 0', borderBottom: '1px solid var(--hairline)', cursor: 'pointer',
+      display: 'grid', gridTemplateColumns: '48px 1fr auto', gap: 14, alignItems: 'center',
+      padding: '11px 0', borderBottom: '1px solid var(--hairline)', cursor: 'pointer',
     }}>
-      <div style={{
-        aspectRatio: '3 / 4', overflow: 'hidden', borderRadius: 2,
-        border: '1px solid var(--hairline)', containerType: 'inline-size',
-      }}>
+      <div style={{ ...posterFrame, aspectRatio: '2 / 3' }}>
         <Cover item={item} />
       </div>
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -37,7 +34,7 @@ const LibraryRow = ({ item, onClick, onToggleShortlist }) => {
           <Mono size={9} dim>{meta.filter(Boolean).join(' · ')}</Mono>
         </div>
         <div style={{
-          fontFamily: 'var(--display)', fontSize: 17, lineHeight: 1.15, color: 'var(--text)',
+          fontFamily: 'var(--display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15, color: 'var(--text)',
           overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
         }}>{item.title}</div>
         <FulfillmentPills item={item} compact />
@@ -72,7 +69,7 @@ const LibraryRow = ({ item, onClick, onToggleShortlist }) => {
                 ? 'color-mix(in oklab, var(--signal) 16%, transparent)' : 'transparent',
               border: `1px solid ${item.queue_rank != null ? 'var(--signal)' : 'var(--hairline-strong)'}`,
               color: item.queue_rank != null ? 'var(--signal)' : 'var(--muted)',
-              fontFamily: 'var(--mono)', fontSize: 8.5, letterSpacing: '0.1em',
+              fontFamily: 'var(--ui)', fontSize: 8.5, letterSpacing: '0.1em',
               textTransform: 'uppercase', whiteSpace: 'nowrap',
             }}
           >{item.queue_rank != null ? `↑ ${item.queue_rank}` : '↑ Next'}</button>
@@ -100,6 +97,23 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
     const s = new Set(items.map((i) => i.recommended_by))
     return ['all', ...Array.from(s)]
   }, [items])
+
+  // "From" collections: everything each person recommended, biggest first.
+  // Shown as Letterboxd list stacks; tapping one is the From filter.
+  const collections = useMemo(() => {
+    const by = new Map()
+    items.forEach((i) => {
+      if (i.status === 'done' || !i.recommended_by) return
+      if (!by.has(i.recommended_by)) by.set(i.recommended_by, [])
+      by.get(i.recommended_by).push(i)
+    })
+    return Array.from(by, ([who, list]) => ({
+      who,
+      // Real art first so the fan reads as posters, not placeholder covers.
+      list: list.slice().sort((a, b) => (b.image_url ? 1 : 0) - (a.image_url ? 1 : 0)),
+      together: list.filter((i) => (i.with || []).includes(partner)).length,
+    })).sort((a, b) => b.list.length - a.list.length).slice(0, 4)
+  }, [items, partner])
 
   const availableGenres = useMemo(() => {
     const s = new Set()
@@ -156,36 +170,64 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   return (
     <div>
       <Masthead
-        kicker={`No. 002 · Library · ${items.length} items`}
-        title="The Collection"
+        title="Library"
+        stats={[
+          { label: 'Saved', value: items.filter((i) => i.status !== 'done').length, onClick: () => setStatusFilter('open') },
+          { label: 'Now', value: items.filter((i) => i.status === 'active').length, onClick: () => setStatusFilter('active') },
+          { label: 'Finished', value: items.filter((i) => i.status === 'done').length, onClick: () => setStatusFilter('done') },
+          { label: `With ${partner}`, value: items.filter((i) => (i.with || []).includes(partner)).length, onClick: () => setTogether('with') },
+        ]}
         right={
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            {/* the "&" (Nate and Amanda) toggle lives in Filters now — no duplicate here */}
-            <button onClick={() => onSetDensity(density === 'grid' ? 'list' : 'grid')} style={{
-              ...btnGhost, padding: '4px 8px', fontSize: 9,
-            }}>{density === 'grid' ? '☷ List' : '▦ Grid'}</button>
-          </div>
+          <button onClick={() => onSetDensity(density === 'grid' ? 'list' : 'grid')} style={{
+            ...btnGhost, padding: '5px 9px', fontSize: 12,
+          }}>{density === 'grid' ? 'List' : 'Grid'}</button>
         }
       />
 
-      <div style={{ padding: '14px 20px 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{
-          display: 'flex', gap: 6, overflowX: 'auto',
-          marginLeft: -2, marginRight: -2, padding: 2,
-          scrollbarWidth: 'none',
-        }}>
-          <button onClick={() => setTypeFilter('all')} style={btnTextChip(typeFilter === 'all')}>All</button>
-          {TYPE_ORDER.map((t) => (
+      {/* Type tabs: Letterboxd's text tab strip, signal underline on the live one. */}
+      <div style={{
+        display: 'flex', gap: 18, overflowX: 'auto', scrollbarWidth: 'none',
+        padding: '0 20px', borderBottom: '1px solid var(--hairline)',
+      }}>
+        {['all', ...TYPE_ORDER].map((t) => {
+          const on = typeFilter === t
+          return (
             <button key={t} onClick={() => setTypeFilter(t)} style={{
-              ...btnTextChip(typeFilter === t),
-              display: 'inline-flex', alignItems: 'center', gap: 6,
+              appearance: 'none', background: 'transparent', border: 0, cursor: 'pointer',
+              padding: '10px 0 11px', flex: 'none',
+              fontFamily: 'var(--ui)', fontSize: 14, fontWeight: 500,
+              color: on ? 'var(--text)' : 'var(--muted)',
+              boxShadow: on ? 'inset 0 -2px var(--signal)' : 'none',
+            }}>{t === 'all' ? 'All' : TYPE_META[t].plural}</button>
+          )
+        })}
+      </div>
+
+      {density === 'grid' && from === 'all' && activeFilters.length === 0 && collections.length > 1 && (
+        <section style={{ padding: '20px 20px 4px' }}>
+          <SectionHead title="From" right={collections.length} />
+          {collections.map((c) => (
+            <button key={c.who} onClick={() => setFrom(c.who)} style={{
+              appearance: 'none', background: 'transparent', border: 0, cursor: 'pointer',
+              width: '100%', textAlign: 'left', color: 'inherit',
+              display: 'grid', gridTemplateColumns: '150px 1fr', gap: 14, alignItems: 'center',
+              padding: '11px 0', borderBottom: '1px solid var(--hairline)',
             }}>
-              <TypeIcon type={t} size={11} weight={1.4} />
-              {TYPE_META[t].plural}
+              <PosterStack items={c.list} width={52} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: 'var(--display)', fontWeight: 700, fontSize: 17, lineHeight: 1.15 }}>
+                  {c.who === 'Me' ? 'Your own finds' : `From ${c.who}`}
+                </div>
+                <div style={{ marginTop: 4, fontFamily: 'var(--ui)', fontSize: 12.5, color: 'var(--muted)' }}>
+                  {c.list.length} saved{c.together ? ` · ${c.together} with ${partner}` : ''}
+                </div>
+              </div>
             </button>
           ))}
-        </div>
+        </section>
+      )}
 
+      <div style={{ padding: '16px 20px 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => setFiltersOpen((o) => !o)} style={{
             ...btnTextChip(filtersOpen || activeFilters.length > 0),
@@ -229,8 +271,8 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 10,
             padding: '12px 12px 14px',
-            border: '1px solid var(--hairline)', borderRadius: 3,
-            background: 'color-mix(in oklab, var(--paper) 60%, transparent)',
+            borderRadius: 3,
+            background: 'var(--paper)',
             animation: 'field-in 240ms cubic-bezier(0.2, 0.7, 0.2, 1) backwards',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -268,7 +310,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
                 ...btnTextChip(together === 'with'),
                 display: 'inline-flex', alignItems: 'center', gap: 5,
               }}>
-                <span style={{ fontFamily: 'var(--display)', fontStyle: 'italic', fontSize: 12, lineHeight: 0.7, transform: 'translateY(-1px)' }}>&amp;</span>
+                <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 12, lineHeight: 0.7, transform: 'translateY(-1px)' }}>&amp;</span>
                 Nate and Amanda
               </button>
             </div>
@@ -291,22 +333,24 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
                 display: 'flex', justifyContent: 'flex-end', paddingTop: 4,
                 borderTop: '1px solid var(--hairline)',
               }}>
-                <button onClick={clearAll} style={{ ...btnGhost, padding: '4px 9px', fontSize: 9 }}>Clear filters</button>
+                <button onClick={clearAll} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Clear filters</button>
               </div>
             )}
           </div>
         )}
       </div>
 
-      <div style={{ padding: '0 20px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <Mono size={9} dim>{filtered.length} of {items.length} · showing</Mono>
-        <Mono size={9} dim>{TYPE_META[typeFilter]?.plural || 'mixed'}</Mono>
+      <div style={{ padding: '6px 20px 4px' }}>
+        <SectionHead
+          title={from !== 'all' ? `From ${from}` : sort === 'up next' ? 'Up next' : TYPE_META[typeFilter]?.plural || 'Everything'}
+          right={`${filtered.length} of ${items.length}`}
+        />
       </div>
 
       {density === 'grid' ? (
         <div style={{
-          padding: '8px 20px 120px',
-          display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px 14px',
+          padding: '10px 20px 120px',
+          display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '12px 9px',
         }}>
           {filtered.map((i) => <Card key={i.id} item={i} onClick={() => onOpenItem(i)} />)}
         </div>
