@@ -79,6 +79,16 @@ const LibraryRow = ({ item, onClick, onToggleShortlist }) => {
   )
 }
 
+// Everything a search should hit: the title plus whoever made it and whoever
+// recommended it.
+export const searchText = (item) => {
+  const e = item.extension || {}
+  return [
+    item.title, e.author, e.director, e.network_or_service, e.source, e.channel,
+    e.host, e.artist, item.recommended_by, ...(item.tags || []),
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
 export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete, onRequestFinish, onToggleShortlist }) => {
   const ed = useEdition()
   const partner = ed.partner || 'Amanda'
@@ -92,6 +102,8 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
   const [lengthFilter, setLengthFilter] = useState('all')
   const [sort, setSort] = useState('recent')
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
 
   const recommenders = useMemo(() => {
     const s = new Set(items.map((i) => i.recommended_by))
@@ -132,8 +144,11 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
 
   const filtered = useMemo(() => {
     let r = items.slice()
+    if (q) r = r.filter((i) => searchText(i).includes(q))
     if (typeFilter !== 'all') r = r.filter((i) => i.type === typeFilter)
-    if (statusFilter === 'open') r = r.filter((i) => i.status !== 'done')
+    // "Is this already in here?" -- a search reaches finished items too,
+    // unless a status was picked on purpose.
+    if (statusFilter === 'open') { if (!q) r = r.filter((i) => i.status !== 'done') }
     else if (statusFilter !== 'all') r = r.filter((i) => i.status === statusFilter)
     if (from !== 'all') r = r.filter((i) => i.recommended_by === from)
     if (together === 'with') r = r.filter((i) => (i.with || []).includes(partner))
@@ -152,7 +167,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
       })
     }
     return r
-  }, [items, typeFilter, statusFilter, from, together, partner, genreFilter, lengthFilter, sort])
+  }, [items, q, typeFilter, statusFilter, from, together, partner, genreFilter, lengthFilter, sort])
 
   const activeFilters = [
     statusFilter !== 'open' && { key: 'status', label: statusFilter, clear: () => setStatusFilter('open') },
@@ -203,7 +218,30 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
         })}
       </div>
 
-      {density === 'grid' && from === 'all' && activeFilters.length === 0 && collections.length > 1 && (
+      <div style={{ padding: '14px 20px 0' }}>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search your library"
+              aria-label="Search your library"
+              style={{
+                appearance: 'none', width: '100%', boxSizing: 'border-box', outline: 0,
+                padding: '10px 34px 10px 12px', borderRadius: 3, border: 0,
+                background: 'var(--paper-soft)', color: 'var(--text)',
+                fontFamily: 'var(--ui)', fontSize: 15,
+              }}
+            />
+            {query && (
+              <button onClick={() => setQuery('')} aria-label="Clear search" style={{
+                position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                appearance: 'none', background: 'transparent', border: 0, cursor: 'pointer',
+                color: 'var(--muted)', fontSize: 18, lineHeight: 1, padding: '4px 6px',
+              }}>×</button>
+            )}
+          </div>
+      </div>
+
+      {density === 'grid' && !q && from === 'all' && activeFilters.length === 0 && collections.length > 1 && (
         <section style={{ padding: '20px 20px 4px' }}>
           <SectionHead title="From" right={collections.length} />
           {collections.map((c) => (
@@ -342,7 +380,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
 
       <div style={{ padding: '6px 20px 4px' }}>
         <SectionHead
-          title={from !== 'all' ? `From ${from}` : sort === 'up next' ? 'Up next' : TYPE_META[typeFilter]?.plural || 'Everything'}
+          title={q ? `Matching “${query.trim()}”` : from !== 'all' ? `From ${from}` : sort === 'up next' ? 'Up next' : TYPE_META[typeFilter]?.plural || 'Everything'}
           right={`${filtered.length} of ${items.length}`}
         />
       </div>
