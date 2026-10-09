@@ -684,25 +684,100 @@ def _fmt_rank(release_title, formats):
     return None
 
 
-def _pick_release(results, want_title, formats, require_format):
-    """Best release: must match the title's significant words; rank by format then seeders."""
+# Explicit language markers in a release title. Indexers list translations
+# under the English title: "L'amore bugiardo (Gone Girl) [Epub ... Ita]"
+# passed the word gate on 2026-09-24 and out-seeded the English epub, so the
+# Italian one was imported, mailed to the Kindle and pushed to the X4.
+# Whole-word tokens only -- "it", "de", "es" are English words -- so a
+# two-letter code only counts when bracketed: "(it)", "[FR]". A Cyrillic
+# title is deliberately NOT a marker (Homo Deus came off a Russian tracker
+# tagged [Английский] = English, 2026-08).
+FOREIGN_WORDS = {
+    "ita", "italian", "italiano", "fra", "fre", "french", "francais", "français",
+    "vf", "vff", "vostfr", "spanish", "espanol", "español", "castellano",
+    "ger", "german", "deutsch", "dutch", "nederlands", "svenska", "swedish",
+    "rus", "russian", "portuguese", "portugues", "português", "polish", "polski",
+    "turkish", "hungarian", "czech", "chinese", "japanese", "korean", "hindi",
+}
+_FOREIGN_CODE = re.compile(r"[\[(]\s*(it|fr|de|es|nl|sv|ru|pt|pl)\s*[\])]", re.I)
+
+
+def _foreign_language(release_title):
+    """The marker that makes this release a translation, or None."""
+    raw = release_title or ""
+    m = _FOREIGN_CODE.search(raw)
+    if m:
+        return m.group(0)
+    for w in _norm(raw).split():
+        if w in FOREIGN_WORDS:
+            return w
+    return None
+
+
+def _title_in_order(toks, text):
+    """Every significant title word appears in TEXT, in title order.
+
+    The old bag-of-words gate ("all tokens present, anywhere") let "Girl Gone
+    Mad by Avery Bishop EPUB" through for "Gone Girl" on 2026-10-07: same two
+    words, a different book, one more seeder than the real one. A release word
+    matches a title word when it equals it or extends it ("girls" for "girl"),
+    so punctuation and plurals still pass; the order is what kills wrong books.
+    """
+    words = _norm(text).split()
+    i = 0
+    for tok in toks:
+        while i < len(words) and not words[i].startswith(tok):
+            i += 1
+        if i == len(words):
+            return False
+        i += 1
+    return True
+
+
+def _author_in(author, text):
+    """Does the release name this author? The surname alone ("Flynn") is enough."""
+    at = [t for t in _sig_tokens(author) if len(t) > 2]
+    if not at:
+        return True
+    words = set(_norm(text).split())
+    return at[-1] in words or all(t in words for t in at)
+
+
+def _pick_release(results, want_title, formats, require_format, author=""):
+    """Best release: title words in order, not a translation, author preferred;
+    then rank by format, then seeders.
+
+    When AUTHOR is known and at least one candidate names them, candidates that
+    do not are dropped outright -- they are almost always another book that
+    happens to share the title's words.
+    """
     toks = _sig_tokens(want_title)
     scored = []
     for r in results or []:
         seeders = r.get("seeders") or 0
         if seeders < 1:
             continue
-        rt = _norm(r.get("title") or "")
-        if not all(tok in rt for tok in toks):      # kills foreign-language / wrong-book noise
+        rtitle = r.get("title") or ""
+        if not _title_in_order(toks, rtitle):      # kills wrong-book noise
             continue
-        fr = _fmt_rank(r.get("title") or "", formats)
+        foreign = _foreign_language(rtitle)
+        if foreign:                                  # a translation listed under the English title
+            log(f"book pick: skipping translation {rtitle[:90]!r} ({foreign})")
+            continue
+        fr = _fmt_rank(rtitle, formats)
         if require_format and fr is None:
             continue
-        scored.append(((fr if fr is not None else len(formats)), -seeders, r))
+        by_author = 0 if (author and _author_in(author, rtitle)) else 1
+        scored.append((by_author, (fr if fr is not None else len(formats)), -seeders, r))
     if not scored:
         return None
-    scored.sort(key=lambda x: (x[0], x[1]))
-    return scored[0][2]
+    if author and any(x[0] == 0 for x in scored):
+        for x in scored:
+            if x[0] != 0:
+                log(f"book pick: skipping {x[3].get('title', '')[:90]!r} (no {author!r})")
+        scored = [x for x in scored if x[0] == 0]
+    scored.sort(key=lambda x: (x[0], x[1], x[2]))
+    return scored[0][3]
 
 
 def _prowlarr_search(q, cats):
@@ -1206,9 +1281,9 @@ def _lg_pick(rows, title):
     for r in rows:
         if r["ext"] != "epub":
             continue
-        if not all(t in r["text"] for t in toks):
+        if not _title_in_order(toks, r["text"]):
             continue
-        if any(f in r["text"] for f in FOREIGN):
+        if any(f in r["text"] for f in FOREIGN) or _foreign_language(r["text"]):
             continue
         if r["size_mb"] and r["size_mb"] > KINDLE_MAX_MB:
             continue
@@ -1287,7 +1362,7 @@ def add_book(req):
             log(f"book '{title}': {kind} already on shelf -> {onshelf}")
             continue
         results = _search_books(title, author, cats, kind)
-        rel = _pick_release(results, title, formats, require)
+        rel = _pick_release(results, title, formats, require, author)
 
         if not rel and kind == "audiobook":
             # Nothing named for this book -- it may still be sitting inside an
@@ -2071,16 +2146,65 @@ def process(req):
 # live progress feedback
 # ---------------------------------------------------------------------------
 
+def _queue_rank(r):
+    """Which queue record stands for a title with several? The one that moves.
+
+    setdefault used to take whichever came first, so a held sibling (stopped,
+    size 0) or a finished-but-unimportable one could speak for the season
+    while the real download sat behind it.
+    """
+    size = r.get("size") or 0
+    left = r.get("sizeleft") or 0
+    moving = 1 if (r.get("status") == "downloading" and size and left < size) else 0
+    unfinished = 1 if (size and left > 0) else 0
+    return (moving, unfinished, size - left)
+
+
 def _queue_index(target, id_field):
     """Map {arr_id -> queue record} for the given *arr app."""
-    code, q = arr(target, "GET", "queue?pageSize=200")
+    extra = "&includeEpisode=true" if id_field == "seriesId" else ""
+    code, q = arr(target, "GET", "queue?pageSize=200" + extra)
     idx = {}
     if code == 200 and isinstance(q, dict):
         for r in q.get("records", []):
             k = r.get(id_field)
-            if k is not None:
-                idx.setdefault(k, r)
+            if k is None:
+                continue
+            cur = idx.get(k)
+            if cur is None or _queue_rank(r) > _queue_rank(cur):
+                idx[k] = r
     return idx
+
+
+def _import_blocked(rec):
+    """Why the *arr will not import a finished download, or None.
+
+    MobLand S02E03/E04 sat at 'completed / importPending' for ten days with
+    "Found executable file with extension: '.exe'" while Cue said
+    "Downloading 100%". Radarr has no file so nothing ever rescued a movie in
+    this state.
+    """
+    if (rec.get("trackedDownloadStatus") or "").lower() not in ("warning", "error"):
+        return None
+    if (rec.get("trackedDownloadState") or "") not in ("importPending", "importBlocked", "importFailed"):
+        return None
+    msgs = [m for sm in (rec.get("statusMessages") or []) for m in (sm.get("messages") or [])]
+    why = msgs[0] if msgs else (rec.get("errorMessage") or "import blocked")
+    return str(why)[:160]
+
+
+def _set_live(d, live):
+    """Write the live keys onto detail, dropping the ones that are None. Returns changed."""
+    changed = False
+    for k, v in live.items():
+        if v is None:
+            if k in d:
+                d.pop(k)
+                changed = True
+        elif d.get(k) != v:
+            d[k] = v
+            changed = True
+    return changed
 
 
 def _progress(rec):
@@ -2100,6 +2224,15 @@ def _has_file(target, path, arr_id):
         return bool(obj.get("hasFile"))
     st = obj.get("statistics") or {}
     return (st.get("episodeFileCount") or 0) > 0
+
+
+def _arr_gone(target, mt, arr_id):
+    """Does Radarr/Sonarr still have this title? True only on a definite 404.
+
+    A timeout or a 5xx is not evidence of anything, so it stays False.
+    """
+    code, _ = arr(target, "GET", f"{'movie' if mt == 'movie' else 'series'}/{arr_id}")
+    return code == 404
 
 
 def _is_cancelled(target, mt, arr_id):
@@ -2219,24 +2352,64 @@ def monitor_downloads():
                 changed = True
         elif rec is not None:                       # actively downloading
             pct, eta = _progress(rec)
-            if tv_pct is not None:
-                pct = tv_pct                        # series progress beats one torrent's
+            live = {"eta": eta, "blocked": _import_blocked(rec), "ep": None, "ep_pct": None}
+            if mt == "tv":
+                # The bar is episodes on disk. The torrent that is actually
+                # moving rides alongside it so the tray can say "S01E05 42%"
+                # instead of pretending the file count is byte progress.
+                ep = rec.get("episode") or {}
+                if ep.get("episodeNumber") is not None:
+                    live["ep"] = "S%02dE%02d" % (ep.get("seasonNumber") or 0, ep["episodeNumber"])
+                live["ep_pct"] = pct
+                if tv_pct is not None:
+                    pct = tv_pct                    # series progress beats one torrent's
+            live["pct"] = pct
             new_status = "downloading"
-            if d.get("pct") != pct or d.get("eta") != eta or r["status"] != "downloading":
-                d["pct"], d["eta"] = pct, eta
-                changed = True
+            changed = _set_live(d, live) or changed
         elif mt == "tv":                             # nothing queued and episodes missing:
-            if tv_pct is not None and d.get("pct") != tv_pct:   # still searching, not done
-                d["pct"] = tv_pct
-                changed = True
+            # Nothing is moving, so say so. Leaving the row on 'downloading'
+            # with its last pct is how the tray ("Downloading 3.3%") and the
+            # card (stamped 'searching' below) came to disagree.
+            new_status = "added"
+            changed = _set_live(d, {"pct": tv_pct, "eta": None, "ep": None,
+                                    "ep_pct": None, "blocked": None}) or changed
         else:                                        # not in queue: landed, or still searching
             if _has_file(target, "movie", arr_id):
                 new_status = "downloaded"
                 d["pct"] = 100
                 changed = True
+            else:
+                new_status = "added"
+                changed = _set_live(d, {"pct": None, "eta": None, "ep": None,
+                                        "ep_pct": None, "blocked": None}) or changed
         # Nothing queued and nothing on disk = the search found nothing it would
         # take. Give it a grace period (indexers and RSS are not instant), then
         # say so rather than leaving the row at "searching" indefinitely.
+        if rec is None and new_status not in ("downloaded", "failed") \
+                and _arr_gone(target, mt, arr_id):
+            # The title was deleted from Radarr/Sonarr. Every lookup 404s,
+            # _has_file and _is_cancelled both read that as False, so the row
+            # sat on 'downloading' with its last pct forever and the escalator
+            # ran a 404 search every day (Procession: 3.3% from 2026-09-22,
+            # escalate_n 21). 'failed' frees the one-active-per-title index so
+            # a fresh push works.
+            app = "Radarr" if mt == "movie" else "Sonarr"
+            d["msg"] = f"removed from {app}; push it again to retry"
+            d["outcome"] = "removed"
+            d.pop("pct", None)
+            d.pop("eta", None)
+            code, resp = sb("PATCH", f"media_requests?id=eq.{r['id']}",
+                            {"status": "failed", "detail": json.dumps(d)},
+                            prefer="return=minimal")
+            if code not in (200, 204):
+                log(f"removed PATCH failed {code} for '{r.get('title')}': {str(resp)[:180]}")
+                continue
+            log(f"failed {mt} '{r.get('title')}': {app} no longer has id {arr_id}")
+            tg(f"{r.get('title')} was removed from {app}, so I stopped tracking it. "
+               f"Push it again if you still want it.", key=f"removed:{mt}:{arr_id}")
+            stamp_fulfillment(r.get("rec_id"),
+                              {"download": {"state": "failed", "detail": f"removed from {app}"}})
+            continue
         if rec is None and new_status not in ("downloaded", "failed") \
                 and _is_cancelled(target, mt, arr_id):
             # Called off. Leave the arr alone (it is already unmonitored) and
@@ -2323,9 +2496,14 @@ def monitor_downloads():
                 where = f" season {r['season']}" if r.get("season") else ""
                 tg(f"Ready to watch: {r['title']}{where}", key=f"done:{r['id']}")
         # movie/tv carry a single leg; books fan out to three (see monitor_books)
-        leg = {"state": "downloaded"} if new_status == "downloaded" else (
-            {"state": "downloading", "pct": d.get("pct")} if rec is not None
-            else {"state": "searching"})
+        if new_status == "downloaded":
+            leg = {"state": "downloaded"}
+        elif rec is not None and d.get("blocked"):
+            leg = {"state": "blocked", "pct": d.get("pct"), "detail": d["blocked"]}
+        elif rec is not None:
+            leg = {"state": "downloading", "pct": d.get("pct"), "detail": None}
+        else:
+            leg = {"state": "searching", "pct": d.get("pct"), "detail": None}
         stamp_fulfillment(r.get("rec_id"), {"download": leg})
 
 
@@ -2772,6 +2950,9 @@ def _is_dead(rec, qt):
     msg = (rec.get("errorMessage") or "").lower()
     if "stall" in msg or "no connection" in msg:
         return "stalled", STALL_GRACE
+    why = _import_blocked(rec)
+    if why and not (rec.get("sizeleft") or 0):
+        return "import blocked: " + why[:70], STALL_GRACE
     if not qt:
         return None, 0
     state = qt.get("state") or ""
@@ -3317,12 +3498,35 @@ def prioritise_first_episodes():
             continue
         groups.setdefault((r.get("seriesId"), ep.get("seasonNumber")), []).append((n, h))
 
+    def _stuck_stopped(h):
+        """A torrent WE stopped (or one left stopped by a restart) that never finished."""
+        t = tor[h]
+        return (t.get("state") or "").startswith("stopped") and (t.get("progress") or 0) < 1
+
     for (sid, season), items in groups.items():
         if len(items) < 2:
-            continue                       # a season pack, or a single episode
+            # A season pack, a single episode -- or the LAST straggler of a
+            # season we held. Siblings import and leave the queue, the group
+            # shrinks to one, and this used to `continue` without ever starting
+            # it: We Own This City S01E06, The Leftovers S01E10 and Sophie
+            # S01E02 all sat at stoppedDL for 10+ days (2026-10-09). The
+            # reaper ignores stoppedDL on purpose, so nothing else rescues it.
+            n, h = items[0]
+            if _stuck_stopped(h):
+                qbit("torrents/start", {"hashes": h})
+                _held.pop(h, None)
+                _gave_up.discard((sid, season))
+                log("first-episode: lone S%02dE%02d was still held, starting it"
+                    % (season or 0, n))
+            continue
         items.sort()
         leader = next(((n, h) for n, h in items if (tor[h].get("progress") or 0) < 1), None)
-        held = [h for _, h in items if h in _held]
+        # `_held` is in-memory and dies with every restart. A torrent that is
+        # stopped and unfinished is held whether or not we remember stopping
+        # it; otherwise a restart orphans the whole season.
+        held = [h for _, h in items if h in _held or _stuck_stopped(h)]
+        for h in held:
+            _held.setdefault(h, now)       # start the FIRST_EP_MAX clock for orphans
 
         # Let everything go when the leader has landed, or when we have been
         # holding the rest long enough that the wait is worse than the wait.
@@ -3367,6 +3571,15 @@ def prioritise_first_episodes():
                 % (len(stop), season or 0, leader_n))
 
 
+def _already_have(app_name, rec):
+    """Is the thing this queue record was fetching already on disk?"""
+    if app_name == "radarr":
+        code, obj = arr(RADARR, "GET", f"movie/{rec.get('movieId')}")
+        return code == 200 and isinstance(obj, dict) and bool(obj.get("hasFile"))
+    code, obj = arr(SONARR, "GET", f"episode/{rec.get('episodeId')}")
+    return code == 200 and isinstance(obj, dict) and bool(obj.get("hasFile"))
+
+
 def reap_stalled(app_name, target, search_cmd, id_field):
     """Remove + blocklist + re-search downloads that are going nowhere."""
     code, q = arr(target, "GET", "queue?pageSize=100")
@@ -3392,6 +3605,14 @@ def reap_stalled(app_name, target, search_cmd, id_field):
                 f"queue/{rid}?removeFromClient=true&blocklist=true"
                 f"&skipRedownload=true")   # we pick the replacement ourselves
             wanted_id = r.get(id_field)
+            if reason.startswith("import blocked") and _already_have(app_name, r):
+                # A REPACK already landed by another route (MobLand S02E03/E04).
+                # Drop the corpse, do not go shopping for a third copy.
+                log(f"reaped {app_name} ({reason}): {(r.get('title') or '?')[:40]} "
+                    f"-> blocklisted, already on disk, no re-search")
+                _stall.pop(key, None)
+                stalled_now.discard(key)
+                continue
             picked = _grab_best_seeded(app_name, target, r)
             if not picked and wanted_id:
                 arr(target, "POST", "command", {"name": search_cmd, f"{id_field}s": [wanted_id]})
@@ -4005,7 +4226,7 @@ def reap_stalled_books():
                 cats, formats, require = AUDIO_CATS, AUDIO_FORMATS, False
             fresh = [x for x in _search_books(title, author, cats)
                      if (x.get("title") or "") not in tried]
-            rel = _pick_release(fresh, title, formats, require)
+            rel = _pick_release(fresh, title, formats, require, author)
             meta["tried"] = tried
             changed = True
             if not rel:

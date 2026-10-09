@@ -76,7 +76,11 @@ export function statusView(row) {
     case 'pending':
       return { label: 'Queued', tone: 'wait', pct: null }
     case 'added':
-      return { label: 'Searching', tone: 'wait', pct: null }
+      // A show keeps its bar while between episodes: the bar is files on
+      // disk, and that number is still true while nothing is queued.
+      return row.media_type === 'tv' && d.episodes
+        ? { label: `Searching · ${d.episodes} eps`, tone: 'wait', pct }
+        : { label: 'Searching', tone: 'wait', pct: null }
     case 'choosing':
       // "Show me options": the bridge listed the candidates and is waiting on a
       // pick, here or on Telegram. Nothing downloads until one is chosen.
@@ -86,6 +90,17 @@ export function statusView(row) {
     case 'watching':
       return watchView(row, d, pct)
     case 'downloading':
+      // The *arr finished the download and refuses to import it (an .exe in
+      // the release, say). It is not downloading and it will not finish; the
+      // bridge reaps it after a grace, but until then say what is wrong.
+      if (d.blocked) return { label: 'Import blocked', tone: 'fail', pct, msg: d.blocked }
+      if (row.media_type === 'tv' && d.episodes) {
+        // The bar is episodes on disk, not bytes. The torrent that is actually
+        // moving gets its own line so a 1 GB episode at 90% is visible.
+        const epPct = Number.isFinite(d.ep_pct) ? Math.max(0, Math.min(100, Math.round(d.ep_pct))) : null
+        const msg = epPct != null ? `${d.ep ? `${d.ep} ` : ''}${epPct}%` : undefined
+        return { label: `Downloading · ${d.episodes} eps`, tone: 'go', pct, eta: d.eta, msg }
+      }
       return { label: pct != null ? `Downloading ${pct}%` : 'Downloading', tone: 'go', pct, eta: d.eta }
     case 'downloaded':
       return { label: 'Done', tone: 'done', pct: 100 }

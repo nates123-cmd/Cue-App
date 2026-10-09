@@ -58,6 +58,9 @@ export function legBadge(key, leg) {
       return mk(`${name} searching`, TONES.wait)
     case 'downloading':
       return mk(pct != null ? `${name} ${pct}%` : `${name} downloading`, TONES.go)
+    case 'blocked':
+      // Finished, but the *arr will not import it. Needs Nate (or the reaper).
+      return mk(`${name} blocked`, TONES.fail, leg.detail || `${name} import blocked`)
     case 'downloaded':
       // An ebook that's downloaded but not yet emailed is a real, distinct state:
       // it's on the shelf (so Place and the X4 can reach it) but not on the Kindle.

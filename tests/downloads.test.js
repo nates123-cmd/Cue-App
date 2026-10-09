@@ -18,6 +18,24 @@ describe('statusView — every status the bridge can write', () => {
     expect(statusView(row('downloading'))).toMatchObject({ label: 'Downloading', pct: null })
   })
 
+  // The bar on a show is episodes on disk, never torrent bytes. Say so, and
+  // carry the moving torrent on its own line so the bar's stillness is not a
+  // mystery (We Own This City sat at "Downloading 66.7%" for ten days).
+  it('labels a show by episodes and shows the live torrent separately', () => {
+    const tv = { status: 'downloading', media_type: 'tv',
+      detail: JSON.stringify({ pct: 66.7, episodes: '4/6', ep: 'S01E06', ep_pct: 41.6 }) }
+    expect(statusView(tv)).toMatchObject({ label: 'Downloading · 4/6 eps', pct: 67, msg: 'S01E06 42%' })
+    const between = { status: 'added', media_type: 'tv', detail: JSON.stringify({ pct: 66.7, episodes: '4/6' }) }
+    expect(statusView(between)).toMatchObject({ label: 'Searching · 4/6 eps', pct: 67 })
+    expect(statusView(row('added')).pct).toBeNull()
+  })
+
+  it('calls out a finished download the arr refuses to import', () => {
+    const v = statusView(row('downloading', { pct: 100, blocked: "Found executable file with extension: '.exe'" }))
+    expect(v).toMatchObject({ label: 'Import blocked', tone: 'fail', pct: 100 })
+    expect(v.msg).toMatch(/\.exe/)
+  })
+
   it('clamps a nonsense percentage rather than rendering it', () => {
     expect(statusView(row('downloading', { pct: 1200 })).pct).toBe(100)
     expect(statusView(row('downloading', { pct: -5 })).pct).toBe(0)
