@@ -684,25 +684,100 @@ def _fmt_rank(release_title, formats):
     return None
 
 
-def _pick_release(results, want_title, formats, require_format):
-    """Best release: must match the title's significant words; rank by format then seeders."""
+# Explicit language markers in a release title. Indexers list translations
+# under the English title: "L'amore bugiardo (Gone Girl) [Epub ... Ita]"
+# passed the word gate on 2026-09-24 and out-seeded the English epub, so the
+# Italian one was imported, mailed to the Kindle and pushed to the X4.
+# Whole-word tokens only -- "it", "de", "es" are English words -- so a
+# two-letter code only counts when bracketed: "(it)", "[FR]". A Cyrillic
+# title is deliberately NOT a marker (Homo Deus came off a Russian tracker
+# tagged [Английский] = English, 2026-08).
+FOREIGN_WORDS = {
+    "ita", "italian", "italiano", "fra", "fre", "french", "francais", "français",
+    "vf", "vff", "vostfr", "spanish", "espanol", "español", "castellano",
+    "ger", "german", "deutsch", "dutch", "nederlands", "svenska", "swedish",
+    "rus", "russian", "portuguese", "portugues", "português", "polish", "polski",
+    "turkish", "hungarian", "czech", "chinese", "japanese", "korean", "hindi",
+}
+_FOREIGN_CODE = re.compile(r"[\[(]\s*(it|fr|de|es|nl|sv|ru|pt|pl)\s*[\])]", re.I)
+
+
+def _foreign_language(release_title):
+    """The marker that makes this release a translation, or None."""
+    raw = release_title or ""
+    m = _FOREIGN_CODE.search(raw)
+    if m:
+        return m.group(0)
+    for w in _norm(raw).split():
+        if w in FOREIGN_WORDS:
+            return w
+    return None
+
+
+def _title_in_order(toks, text):
+    """Every significant title word appears in TEXT, in title order.
+
+    The old bag-of-words gate ("all tokens present, anywhere") let "Girl Gone
+    Mad by Avery Bishop EPUB" through for "Gone Girl" on 2026-10-07: same two
+    words, a different book, one more seeder than the real one. A release word
+    matches a title word when it equals it or extends it ("girls" for "girl"),
+    so punctuation and plurals still pass; the order is what kills wrong books.
+    """
+    words = _norm(text).split()
+    i = 0
+    for tok in toks:
+        while i < len(words) and not words[i].startswith(tok):
+            i += 1
+        if i == len(words):
+            return False
+        i += 1
+    return True
+
+
+def _author_in(author, text):
+    """Does the release name this author? The surname alone ("Flynn") is enough."""
+    at = [t for t in _sig_tokens(author) if len(t) > 2]
+    if not at:
+        return True
+    words = set(_norm(text).split())
+    return at[-1] in words or all(t in words for t in at)
+
+
+def _pick_release(results, want_title, formats, require_format, author=""):
+    """Best release: title words in order, not a translation, author preferred;
+    then rank by format, then seeders.
+
+    When AUTHOR is known and at least one candidate names them, candidates that
+    do not are dropped outright -- they are almost always another book that
+    happens to share the title's words.
+    """
     toks = _sig_tokens(want_title)
     scored = []
     for r in results or []:
         seeders = r.get("seeders") or 0
         if seeders < 1:
             continue
-        rt = _norm(r.get("title") or "")
-        if not all(tok in rt for tok in toks):      # kills foreign-language / wrong-book noise
+        rtitle = r.get("title") or ""
+        if not _title_in_order(toks, rtitle):      # kills wrong-book noise
             continue
-        fr = _fmt_rank(r.get("title") or "", formats)
+        foreign = _foreign_language(rtitle)
+        if foreign:                                  # a translation listed under the English title
+            log(f"book pick: skipping translation {rtitle[:90]!r} ({foreign})")
+            continue
+        fr = _fmt_rank(rtitle, formats)
         if require_format and fr is None:
             continue
-        scored.append(((fr if fr is not None else len(formats)), -seeders, r))
+        by_author = 0 if (author and _author_in(author, rtitle)) else 1
+        scored.append((by_author, (fr if fr is not None else len(formats)), -seeders, r))
     if not scored:
         return None
-    scored.sort(key=lambda x: (x[0], x[1]))
-    return scored[0][2]
+    if author and any(x[0] == 0 for x in scored):
+        for x in scored:
+            if x[0] != 0:
+                log(f"book pick: skipping {x[3].get('title', '')[:90]!r} (no {author!r})")
+        scored = [x for x in scored if x[0] == 0]
+    scored.sort(key=lambda x: (x[0], x[1], x[2]))
+    return scored[0][3]
 
 
 def _prowlarr_search(q, cats):
@@ -1206,9 +1281,9 @@ def _lg_pick(rows, title):
     for r in rows:
         if r["ext"] != "epub":
             continue
-        if not all(t in r["text"] for t in toks):
+        if not _title_in_order(toks, r["text"]):
             continue
-        if any(f in r["text"] for f in FOREIGN):
+        if any(f in r["text"] for f in FOREIGN) or _foreign_language(r["text"]):
             continue
         if r["size_mb"] and r["size_mb"] > KINDLE_MAX_MB:
             continue
@@ -1287,7 +1362,7 @@ def add_book(req):
             log(f"book '{title}': {kind} already on shelf -> {onshelf}")
             continue
         results = _search_books(title, author, cats, kind)
-        rel = _pick_release(results, title, formats, require)
+        rel = _pick_release(results, title, formats, require, author)
 
         if not rel and kind == "audiobook":
             # Nothing named for this book -- it may still be sitting inside an
@@ -2102,6 +2177,15 @@ def _has_file(target, path, arr_id):
     return (st.get("episodeFileCount") or 0) > 0
 
 
+def _arr_gone(target, mt, arr_id):
+    """Does Radarr/Sonarr still have this title? True only on a definite 404.
+
+    A timeout or a 5xx is not evidence of anything, so it stays False.
+    """
+    code, _ = arr(target, "GET", f"{'movie' if mt == 'movie' else 'series'}/{arr_id}")
+    return code == 404
+
+
 def _is_cancelled(target, mt, arr_id):
     """Has a human called this request off?
 
@@ -2237,6 +2321,31 @@ def monitor_downloads():
         # Nothing queued and nothing on disk = the search found nothing it would
         # take. Give it a grace period (indexers and RSS are not instant), then
         # say so rather than leaving the row at "searching" indefinitely.
+        if rec is None and new_status not in ("downloaded", "failed") \
+                and _arr_gone(target, mt, arr_id):
+            # The title was deleted from Radarr/Sonarr. Every lookup 404s,
+            # _has_file and _is_cancelled both read that as False, so the row
+            # sat on 'downloading' with its last pct forever and the escalator
+            # ran a 404 search every day (Procession: 3.3% from 2026-09-22,
+            # escalate_n 21). 'failed' frees the one-active-per-title index so
+            # a fresh push works.
+            app = "Radarr" if mt == "movie" else "Sonarr"
+            d["msg"] = f"removed from {app}; push it again to retry"
+            d["outcome"] = "removed"
+            d.pop("pct", None)
+            d.pop("eta", None)
+            code, resp = sb("PATCH", f"media_requests?id=eq.{r['id']}",
+                            {"status": "failed", "detail": json.dumps(d)},
+                            prefer="return=minimal")
+            if code not in (200, 204):
+                log(f"removed PATCH failed {code} for '{r.get('title')}': {str(resp)[:180]}")
+                continue
+            log(f"failed {mt} '{r.get('title')}': {app} no longer has id {arr_id}")
+            tg(f"{r.get('title')} was removed from {app}, so I stopped tracking it. "
+               f"Push it again if you still want it.", key=f"removed:{mt}:{arr_id}")
+            stamp_fulfillment(r.get("rec_id"),
+                              {"download": {"state": "failed", "detail": f"removed from {app}"}})
+            continue
         if rec is None and new_status not in ("downloaded", "failed") \
                 and _is_cancelled(target, mt, arr_id):
             # Called off. Leave the arr alone (it is already unmonitored) and
@@ -3317,12 +3426,35 @@ def prioritise_first_episodes():
             continue
         groups.setdefault((r.get("seriesId"), ep.get("seasonNumber")), []).append((n, h))
 
+    def _stuck_stopped(h):
+        """A torrent WE stopped (or one left stopped by a restart) that never finished."""
+        t = tor[h]
+        return (t.get("state") or "").startswith("stopped") and (t.get("progress") or 0) < 1
+
     for (sid, season), items in groups.items():
         if len(items) < 2:
-            continue                       # a season pack, or a single episode
+            # A season pack, a single episode -- or the LAST straggler of a
+            # season we held. Siblings import and leave the queue, the group
+            # shrinks to one, and this used to `continue` without ever starting
+            # it: We Own This City S01E06, The Leftovers S01E10 and Sophie
+            # S01E02 all sat at stoppedDL for 10+ days (2026-10-09). The
+            # reaper ignores stoppedDL on purpose, so nothing else rescues it.
+            n, h = items[0]
+            if _stuck_stopped(h):
+                qbit("torrents/start", {"hashes": h})
+                _held.pop(h, None)
+                _gave_up.discard((sid, season))
+                log("first-episode: lone S%02dE%02d was still held, starting it"
+                    % (season or 0, n))
+            continue
         items.sort()
         leader = next(((n, h) for n, h in items if (tor[h].get("progress") or 0) < 1), None)
-        held = [h for _, h in items if h in _held]
+        # `_held` is in-memory and dies with every restart. A torrent that is
+        # stopped and unfinished is held whether or not we remember stopping
+        # it; otherwise a restart orphans the whole season.
+        held = [h for _, h in items if h in _held or _stuck_stopped(h)]
+        for h in held:
+            _held.setdefault(h, now)       # start the FIRST_EP_MAX clock for orphans
 
         # Let everything go when the leader has landed, or when we have been
         # holding the rest long enough that the wait is worse than the wait.
@@ -4005,7 +4137,7 @@ def reap_stalled_books():
                 cats, formats, require = AUDIO_CATS, AUDIO_FORMATS, False
             fresh = [x for x in _search_books(title, author, cats)
                      if (x.get("title") or "") not in tried]
-            rel = _pick_release(fresh, title, formats, require)
+            rel = _pick_release(fresh, title, formats, require, author)
             meta["tried"] = tried
             changed = True
             if not rel:
