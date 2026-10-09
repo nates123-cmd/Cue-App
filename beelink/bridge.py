@@ -2146,16 +2146,65 @@ def process(req):
 # live progress feedback
 # ---------------------------------------------------------------------------
 
+def _queue_rank(r):
+    """Which queue record stands for a title with several? The one that moves.
+
+    setdefault used to take whichever came first, so a held sibling (stopped,
+    size 0) or a finished-but-unimportable one could speak for the season
+    while the real download sat behind it.
+    """
+    size = r.get("size") or 0
+    left = r.get("sizeleft") or 0
+    moving = 1 if (r.get("status") == "downloading" and size and left < size) else 0
+    unfinished = 1 if (size and left > 0) else 0
+    return (moving, unfinished, size - left)
+
+
 def _queue_index(target, id_field):
     """Map {arr_id -> queue record} for the given *arr app."""
-    code, q = arr(target, "GET", "queue?pageSize=200")
+    extra = "&includeEpisode=true" if id_field == "seriesId" else ""
+    code, q = arr(target, "GET", "queue?pageSize=200" + extra)
     idx = {}
     if code == 200 and isinstance(q, dict):
         for r in q.get("records", []):
             k = r.get(id_field)
-            if k is not None:
-                idx.setdefault(k, r)
+            if k is None:
+                continue
+            cur = idx.get(k)
+            if cur is None or _queue_rank(r) > _queue_rank(cur):
+                idx[k] = r
     return idx
+
+
+def _import_blocked(rec):
+    """Why the *arr will not import a finished download, or None.
+
+    MobLand S02E03/E04 sat at 'completed / importPending' for ten days with
+    "Found executable file with extension: '.exe'" while Cue said
+    "Downloading 100%". Radarr has no file so nothing ever rescued a movie in
+    this state.
+    """
+    if (rec.get("trackedDownloadStatus") or "").lower() not in ("warning", "error"):
+        return None
+    if (rec.get("trackedDownloadState") or "") not in ("importPending", "importBlocked", "importFailed"):
+        return None
+    msgs = [m for sm in (rec.get("statusMessages") or []) for m in (sm.get("messages") or [])]
+    why = msgs[0] if msgs else (rec.get("errorMessage") or "import blocked")
+    return str(why)[:160]
+
+
+def _set_live(d, live):
+    """Write the live keys onto detail, dropping the ones that are None. Returns changed."""
+    changed = False
+    for k, v in live.items():
+        if v is None:
+            if k in d:
+                d.pop(k)
+                changed = True
+        elif d.get(k) != v:
+            d[k] = v
+            changed = True
+    return changed
 
 
 def _progress(rec):
@@ -2303,21 +2352,36 @@ def monitor_downloads():
                 changed = True
         elif rec is not None:                       # actively downloading
             pct, eta = _progress(rec)
-            if tv_pct is not None:
-                pct = tv_pct                        # series progress beats one torrent's
+            live = {"eta": eta, "blocked": _import_blocked(rec), "ep": None, "ep_pct": None}
+            if mt == "tv":
+                # The bar is episodes on disk. The torrent that is actually
+                # moving rides alongside it so the tray can say "S01E05 42%"
+                # instead of pretending the file count is byte progress.
+                ep = rec.get("episode") or {}
+                if ep.get("episodeNumber") is not None:
+                    live["ep"] = "S%02dE%02d" % (ep.get("seasonNumber") or 0, ep["episodeNumber"])
+                live["ep_pct"] = pct
+                if tv_pct is not None:
+                    pct = tv_pct                    # series progress beats one torrent's
+            live["pct"] = pct
             new_status = "downloading"
-            if d.get("pct") != pct or d.get("eta") != eta or r["status"] != "downloading":
-                d["pct"], d["eta"] = pct, eta
-                changed = True
+            changed = _set_live(d, live) or changed
         elif mt == "tv":                             # nothing queued and episodes missing:
-            if tv_pct is not None and d.get("pct") != tv_pct:   # still searching, not done
-                d["pct"] = tv_pct
-                changed = True
+            # Nothing is moving, so say so. Leaving the row on 'downloading'
+            # with its last pct is how the tray ("Downloading 3.3%") and the
+            # card (stamped 'searching' below) came to disagree.
+            new_status = "added"
+            changed = _set_live(d, {"pct": tv_pct, "eta": None, "ep": None,
+                                    "ep_pct": None, "blocked": None}) or changed
         else:                                        # not in queue: landed, or still searching
             if _has_file(target, "movie", arr_id):
                 new_status = "downloaded"
                 d["pct"] = 100
                 changed = True
+            else:
+                new_status = "added"
+                changed = _set_live(d, {"pct": None, "eta": None, "ep": None,
+                                        "ep_pct": None, "blocked": None}) or changed
         # Nothing queued and nothing on disk = the search found nothing it would
         # take. Give it a grace period (indexers and RSS are not instant), then
         # say so rather than leaving the row at "searching" indefinitely.
@@ -2432,9 +2496,14 @@ def monitor_downloads():
                 where = f" season {r['season']}" if r.get("season") else ""
                 tg(f"Ready to watch: {r['title']}{where}", key=f"done:{r['id']}")
         # movie/tv carry a single leg; books fan out to three (see monitor_books)
-        leg = {"state": "downloaded"} if new_status == "downloaded" else (
-            {"state": "downloading", "pct": d.get("pct")} if rec is not None
-            else {"state": "searching"})
+        if new_status == "downloaded":
+            leg = {"state": "downloaded"}
+        elif rec is not None and d.get("blocked"):
+            leg = {"state": "blocked", "pct": d.get("pct"), "detail": d["blocked"]}
+        elif rec is not None:
+            leg = {"state": "downloading", "pct": d.get("pct"), "detail": None}
+        else:
+            leg = {"state": "searching", "pct": d.get("pct"), "detail": None}
         stamp_fulfillment(r.get("rec_id"), {"download": leg})
 
 
@@ -2881,6 +2950,9 @@ def _is_dead(rec, qt):
     msg = (rec.get("errorMessage") or "").lower()
     if "stall" in msg or "no connection" in msg:
         return "stalled", STALL_GRACE
+    why = _import_blocked(rec)
+    if why and not (rec.get("sizeleft") or 0):
+        return "import blocked: " + why[:70], STALL_GRACE
     if not qt:
         return None, 0
     state = qt.get("state") or ""
@@ -3499,6 +3571,15 @@ def prioritise_first_episodes():
                 % (len(stop), season or 0, leader_n))
 
 
+def _already_have(app_name, rec):
+    """Is the thing this queue record was fetching already on disk?"""
+    if app_name == "radarr":
+        code, obj = arr(RADARR, "GET", f"movie/{rec.get('movieId')}")
+        return code == 200 and isinstance(obj, dict) and bool(obj.get("hasFile"))
+    code, obj = arr(SONARR, "GET", f"episode/{rec.get('episodeId')}")
+    return code == 200 and isinstance(obj, dict) and bool(obj.get("hasFile"))
+
+
 def reap_stalled(app_name, target, search_cmd, id_field):
     """Remove + blocklist + re-search downloads that are going nowhere."""
     code, q = arr(target, "GET", "queue?pageSize=100")
@@ -3524,6 +3605,14 @@ def reap_stalled(app_name, target, search_cmd, id_field):
                 f"queue/{rid}?removeFromClient=true&blocklist=true"
                 f"&skipRedownload=true")   # we pick the replacement ourselves
             wanted_id = r.get(id_field)
+            if reason.startswith("import blocked") and _already_have(app_name, r):
+                # A REPACK already landed by another route (MobLand S02E03/E04).
+                # Drop the corpse, do not go shopping for a third copy.
+                log(f"reaped {app_name} ({reason}): {(r.get('title') or '?')[:40]} "
+                    f"-> blocklisted, already on disk, no re-search")
+                _stall.pop(key, None)
+                stalled_now.discard(key)
+                continue
             picked = _grab_best_seeded(app_name, target, r)
             if not picked and wanted_id:
                 arr(target, "POST", "command", {"name": search_cmd, f"{id_field}s": [wanted_id]})
