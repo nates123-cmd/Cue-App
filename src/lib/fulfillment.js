@@ -12,8 +12,13 @@
 // live pct into the same blob, so one read covers in-flight and forever.
 //
 // Legs:
-//   ebook     — grabbed (torrent or Libgen), imported to EBOOK_DIR, emailed to Kindle
-//   audiobook — grabbed, hardlinked into AUDIOBOOK_DIR, auto-imported by ABS
+//   ebook     — grabbed (torrent or Libgen), imported to EBOOK_DIR, then delivered:
+//               emailed to the Kindle (book_delivery=kindle, the default) or
+//               confirmed visible in the requester's own Audiobookshelf library
+//               (book_delivery=abs). An ABS delivery carries `url`, the public
+//               listen.nsteph.com item link, which the detail panel renders.
+//   audiobook — grabbed, hardlinked into AUDIOBOOK_DIR, auto-imported by ABS;
+//               reaches `delivered` (with `url`) only for book_delivery=abs
 //   place     — epub indexed by epubpos + published to `reading_books`, so the
 //               Place PWA can push a reading position to the X4 / audiobook
 //   download  — movie/tv equivalent (single leg, Radarr/Sonarr)
@@ -51,7 +56,10 @@ export function legBadge(key, leg) {
   const short = LEG_SHORT[key] || name
   const pct = pctOf(leg)
   const at = leg.at || null
-  const mk = (label, tone, title) => ({ key, label, short, tone, title: title || label, at, pct })
+  // `url` is where the delivered copy can be opened (an Audiobookshelf item
+  // through the public proxy); only the ABS delivery path sets it.
+  const url = typeof leg.url === 'string' && /^https?:\/\//.test(leg.url) ? leg.url : null
+  const mk = (label, tone, title) => ({ key, label, short, tone, title: title || label, at, pct, url })
 
   switch (leg.state) {
     case 'searching':
@@ -63,7 +71,11 @@ export function legBadge(key, leg) {
       // it's on the shelf (so Place and the X4 can reach it) but not on the Kindle.
       return mk(`${name} downloaded`, TONES.done, leg.detail || `${name} downloaded`)
     case 'delivered':
-      return mk(`${name} delivered`, TONES.done, leg.kindle || `${name} delivered`)
+      // Kindle deliveries carry the mail receipt in `kindle`; Audiobookshelf
+      // deliveries say where it landed in `detail` (and may still carry a
+      // secondary `kindle` receipt, which the detail panel shows after it).
+      return mk(`${name} delivered`, TONES.done,
+        [leg.detail, leg.kindle].filter(Boolean).join(' · ') || `${name} delivered`)
     case 'pending':
       return mk(`${name} syncing`, TONES.wait, leg.detail || `${name} sync pending`)
     case 'ready':

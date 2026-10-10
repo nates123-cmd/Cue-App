@@ -154,6 +154,12 @@ const FulfillmentPanel = ({ item }) => {
                 overflowWrap: 'anywhere',
               }}>{b.title}</span>
             )}
+            {b.url && (
+              <a href={b.url} target="_blank" rel="noopener noreferrer" style={{
+                fontFamily: 'var(--ui)', fontSize: 9, color: 'var(--signal)',
+                textDecoration: 'none', letterSpacing: '0.06em',
+              }}>Open in Audiobookshelf ↗</a>
+            )}
           </div>
         </div>
       ))}

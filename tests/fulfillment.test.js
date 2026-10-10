@@ -25,6 +25,28 @@ describe('legBadge — one pipeline leg → one badge', () => {
     expect(b.title).toContain('emailed')
   })
 
+  it('reads an Audiobookshelf delivery off either book leg, with its public link', () => {
+    // book_delivery=abs: the bridge confirmed the item AS the requester and
+    // stamped the listen.nsteph.com link; a secondary Kindle receipt rides along.
+    const b = legBadge('ebook', {
+      state: 'delivered', detail: 'on Audiobookshelf',
+      url: 'https://listen.nsteph.com/item/0e5e743a', kindle: 'emailed x.epub (1.9MB) to kindle',
+    })
+    expect(b.label).toBe('Ebook delivered')
+    expect(b.tone).toBe('done')
+    expect(b.title).toBe('on Audiobookshelf · emailed x.epub (1.9MB) to kindle')
+    expect(b.url).toBe('https://listen.nsteph.com/item/0e5e743a')
+    const a = legBadge('audiobook', { state: 'delivered', detail: 'on Audiobookshelf', url: 'https://listen.nsteph.com/item/1105' })
+    expect(a.label).toBe('Audiobook delivered')
+    expect(a.url).toBe('https://listen.nsteph.com/item/1105')
+  })
+
+  it('never turns a non-http url into a link', () => {
+    expect(legBadge('ebook', { state: 'delivered', url: 'javascript:alert(1)' }).url).toBeNull()
+    expect(legBadge('ebook', { state: 'delivered', kindle: 'emailed' }).url).toBeNull()
+    expect(legBadge('ebook', { state: 'downloaded' }).url).toBeNull()
+  })
+
   it('keeps "downloaded" distinct from "delivered"', () => {
     // On the shelf (so Place and the X4 can reach it) but NOT on the Kindle.
     const b = legBadge('ebook', { state: 'downloaded' })
