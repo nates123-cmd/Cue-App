@@ -50,7 +50,13 @@ const LEG_SHORT = {
   progress: 'Read',
 }
 
-const SOURCE_NAME = { kindle: 'Kindle', jellyfin: 'Jellyfin' }
+const SOURCE_NAME = { kindle: 'Kindle', jellyfin: 'Jellyfin', audiobookshelf: 'Audiobookshelf', manual: null }
+// done / started verbs per device: a book is read, an audiobook listened to, a film watched.
+const SOURCE_VERBS = {
+  kindle: ['Read', 'Reading'],
+  audiobookshelf: ['Listened', 'Listening'],
+  jellyfin: ['Watched', 'Watching'],
+}
 
 function pctOf(leg) {
   const p = Number(leg?.pct)
@@ -74,8 +80,7 @@ export function legBadge(key, leg) {
   // watched, and the label names the device so Nate knows who said so.
   if (key === 'progress') {
     const src = SOURCE_NAME[leg.source] || null
-    const verb = leg.source === 'kindle' ? 'Read' : 'Watched'
-    const going = leg.source === 'kindle' ? 'Reading' : 'Watching'
+    const [verb, going] = SOURCE_VERBS[leg.source] || ['Finished', 'In progress']
     if (leg.state === 'done') {
       return { ...mk(src ? `${verb} · ${src}` : 'Finished', TONES.done, leg.detail || `Finished on ${src || 'device'}`), short: verb }
     }

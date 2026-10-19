@@ -26,6 +26,19 @@ describe('legBadge — device progress leg (cue-finish daemon)', () => {
     expect(b.tone).toBe('done')
   })
 
+  it('reads a finished audiobook off Audiobookshelf, and a by-hand finish plainly', () => {
+    const a = legBadge('progress', { state: 'done', source: 'audiobookshelf', detail: 'Finished on Audiobookshelf' })
+    expect(a.label).toBe('Listened · Audiobookshelf')
+    expect(a.short).toBe('Listened')
+    const l = legBadge('progress', { state: 'started', source: 'audiobookshelf', pct: 89 })
+    expect(l.label).toBe('Listening 89%')
+    expect(l.title).toBe('Listening on Audiobookshelf')
+    const m = legBadge('progress', { state: 'done', source: 'manual', detail: 'Marked done by Nate' })
+    expect(m.label).toBe('Finished')
+    expect(m.tone).toBe('done')
+    expect(m.title).toBe('Marked done by Nate')
+  })
+
   it('shows reading progress as in-flight with the Kindle percentage', () => {
     const b = legBadge('progress', { state: 'started', source: 'kindle', pct: 34 })
     expect(b.label).toBe('Reading 34%')

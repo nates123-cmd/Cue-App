@@ -189,17 +189,31 @@ def rec_tmdb(rec):
     return str(v) if v not in (None, '') else None
 
 
+def main_title(s):
+    """Title with any subtitle dropped: 'Gone Girl: A Novel' -> 'Gone Girl'."""
+    return (s or '').split(':', 1)[0]
+
+
+def titles_agree(a, b):
+    fa, fb = fold(a), fold(b)
+    if not fa or not fb:
+        return False
+    return fa == fb or fold(main_title(a)) == fb or fa == fold(main_title(b))
+
+
 def match_event(rec, events):
     """The device event that speaks for this card, or None.
 
     tmdb id wins when both sides have one. Otherwise the folded title must be
-    equal, and the years must agree when both are known. Books have no ids, so
-    they always match on title; the folder name the bridge made is the same
-    fold of the same Cue title.
+    equal (a subtitle on either side is ignored: Audiobookshelf says
+    "Gone Girl: A Novel", the card says "Gone Girl"), and the years must agree
+    when both are known. Books have no ids, so they always match on title; the
+    folder name the bridge made is the same fold of the same Cue title. Among
+    several book events the newest wins, so a stale Kindle row never outvotes
+    the audiobook you listened to this morning.
     """
     kind = rec_kind(rec)
     tmdb = rec_tmdb(rec)
-    title = fold(rec.get('title'))
     year = rec.get('year')
     best = None
     for ev in events:
@@ -209,11 +223,18 @@ def match_event(rec, events):
             if str(ev['tmdb']) == tmdb:
                 return ev
             continue
-        if not title or fold(ev.get('title')) != title:
+        if not titles_agree(rec.get('title'), ev.get('title')):
             continue
         if year and ev.get('year') and int(year) != int(ev['year']):
             continue
-        best = best or ev
+        if best is None:
+            best = ev
+        elif ev.get('finished') and not best.get('finished'):
+            best = ev
+        elif bool(ev.get('finished')) == bool(best.get('finished')):
+            a, b = parse_ts(ev.get('at')), parse_ts(best.get('at'))
+            if a and b and a > b:
+                best = ev
     return best
 
 
@@ -363,17 +384,18 @@ def koinsight_titles(con):
 
 
 def kosync_rows():
-    """{document: (pct, updated_ms)} for the Kindle's own kosync rows."""
+    """{document: (pct, updated_ms)} -- the newest kosync row per book across
+    every device: the Kindle's own row and the `reading-sync` row that
+    reading-follow writes when the audiobook moves. A Kindle row from three
+    days ago must not outvote this morning's listening."""
     db = env('KOSYNC_DB', '/home/nate/apps/kosync/data/prod.sqlite3')
     if not os.path.exists(db):
         return {}, {}
     con = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=5)
     try:
         q = ('select p.document, p.percentage, p.updated_at from progress p '
-             'join user u on u.id = p.user_id '
-             'where u.username = ? and (p.device_id = ? or p.device = ?)')
-        rows = con.execute(q, (env('KOSYNC_USER'), env('KINDLE_DEVICE_ID'),
-                               env('KINDLE_DEVICE_NAME', 'KindleColorSoft'))).fetchall()
+             'join user u on u.id = p.user_id where u.username = ?')
+        rows = con.execute(q, (env('KOSYNC_USER'),)).fetchall()
         titles = koinsight_titles(con)
     finally:
         con.close()
@@ -384,8 +406,56 @@ def kosync_rows():
         except (TypeError, ValueError):
             d = parse_ts(upd)
             ms = int(d.timestamp() * 1000) if d else 0
-        out[doc] = (float(pct or 0), ms)
+        if doc not in out or ms > out[doc][1]:
+            out[doc] = (float(pct or 0), ms)
     return out, titles
+
+
+# ---------------------------------------------------------------------------
+# Audiobookshelf -> events
+
+def abs_title(item_id, state):
+    cache = state.setdefault('abs_titles', {})
+    if item_id in cache:
+        return cache[item_id]
+    code, d = http('GET', f"{env('ABS_URL').rstrip('/')}/api/items/{item_id}",
+                   {'Authorization': f"Bearer {env('ABS_TOKEN')}"})
+    title = None
+    if code == 200 and isinstance(d, dict):
+        title = ((d.get('media') or {}).get('metadata') or {}).get('title')
+    cache[item_id] = title
+    return title
+
+
+def abs_events(state):
+    """One event per audiobook with progress: finished when ABS says so or the
+    position is past ABS_FINISH_PCT (credits and an afterword sit after 97%)."""
+    if not env('ABS_URL') or not env('ABS_TOKEN'):
+        return []
+    code, me = http('GET', f"{env('ABS_URL').rstrip('/')}/api/me",
+                    {'Authorization': f"Bearer {env('ABS_TOKEN')}"})
+    if code != 200 or not isinstance(me, dict):
+        log(f'abs /api/me {code}: {str(me)[:120]}')
+        return []
+    finish_pct = float(env('ABS_FINISH_PCT', '0.97'))
+    start_pct = float(env('START_PCT', '0.02'))
+    out = []
+    for p in me.get('mediaProgress') or []:
+        pct = float(p.get('progress') or 0)
+        finished = bool(p.get('isFinished')) or pct >= finish_pct
+        if not finished and pct < start_pct:
+            continue
+        title = abs_title(p.get('libraryItemId'), state)
+        if not title:
+            continue
+        ms = p.get('finishedAt') if finished and p.get('finishedAt') else p.get('lastUpdate')
+        out.append({
+            'kind': 'book', 'source': 'audiobookshelf', 'title': title, 'year': None, 'tmdb': None,
+            'finished': finished, 'started': True, 'pct': min(pct, 1.0),
+            'at': iso(parse_ts(ms)) if ms else now_iso(),
+            'detail': 'Finished on Audiobookshelf' if finished else f'{round(pct * 100)}% listened on Audiobookshelf',
+        })
+    return out
 
 
 def kindle_up():
@@ -556,7 +626,8 @@ def apply(rec, ev, action, dry=False):
 
 def tick(state, dry=False, force_sidecar=False):
     recs = load_recs()
-    events = jellyfin_events() + kindle_events(state, force_sidecar=force_sidecar)
+    events = (jellyfin_events() + kindle_events(state, force_sidecar=force_sidecar)
+              + abs_events(state))
     finish_pct = float(env('FINISH_PCT', '0.99'))
     lines = []
     for rec in recs:
@@ -601,6 +672,27 @@ def main():
     dry = '--dry-run' in sys.argv
     poll = int(env('POLL_SECONDS', '120'))
     state = load_state()
+    if '--done' in sys.argv:
+        # cue-finish.py --done "Gone Girl" "Search Party": Nate says so, no
+        # device needed. Same write path as a device finish, source 'manual'.
+        titles = sys.argv[sys.argv.index('--done') + 1:]
+        recs = load_recs()
+        lines = []
+        for t in titles:
+            hits = [r for r in recs if titles_agree(r.get('title'), t)]
+            if not hits:
+                log(f'--done: no open card matches {t!r}')
+                continue
+            for rec in hits:
+                ev = {'kind': rec_kind(rec), 'source': 'manual', 'title': rec.get('title'),
+                      'finished': True, 'started': True, 'at': now_iso(),
+                      'detail': 'Marked done by Nate'}
+                line = apply(rec, ev, 'finish', dry=dry)
+                if line:
+                    lines.append(line)
+        if lines:
+            notify('Cue: marked done\n' + '\n'.join('- ' + l for l in lines))
+        return
     log(f"cue-finish up: user {env('CUE_USER_ID')[:8]}, jellyfin user {env('JELLYFIN_USER_ID')[:8]}, "
         f"kindle {env('KINDLE_HOST') or 'off'}, poll {poll}s{' DRY RUN' if dry else ''}")
     while True:

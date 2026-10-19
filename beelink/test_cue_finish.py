@@ -45,6 +45,19 @@ assert cf.match_event({"media_type": "movie", "title": "Fleabag"}, events) is No
 assert cf.match_event({"media_type": "tv", "title": "Fleabag"}, events) is show
 assert cf.match_event({"media_type": "film", "title": "Frankenweenie"}, events) is other
 assert cf.match_event({"media_type": "book", "title": "Vera or Faith"}, events) is book
+# subtitles on either side are ignored (Audiobookshelf says "Gone Girl: A Novel")
+assert cf.titles_agree("Gone Girl", "Gone Girl: A Novel")
+assert cf.titles_agree("Slow Productivity: The Lost Art of Accomplishment Without Burnout", "Slow Productivity")
+assert not cf.titles_agree("Gone Girl", "Gone Girl 2")
+# several book events for one card: a finished one beats an unfinished one,
+# and among equals the newest wins -- a stale Kindle row never outvotes the audiobook
+stale_kindle = dict(book, title="Gone Girl", pct=0.31, at="2026-10-16T00:00:00Z")
+fresh_abs = dict(book, source="audiobookshelf", title="Gone Girl: A Novel", pct=0.89, at="2026-10-19T00:00:00Z")
+done_abs = dict(fresh_abs, finished=True, pct=1.0, at="2026-10-01T00:00:00Z")
+gg = {"media_type": "book", "title": "Gone Girl"}
+assert cf.match_event(gg, [stale_kindle, fresh_abs]) is fresh_abs
+assert cf.match_event(gg, [fresh_abs, stale_kindle]) is fresh_abs
+assert cf.match_event(gg, [fresh_abs, done_abs, stale_kindle]) is done_abs
 print("matching: PASS")
 
 # --- decisions ------------------------------------------------------------------
