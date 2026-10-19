@@ -6,7 +6,7 @@ import {
 } from '../components/primitives'
 import { DiscoverRow } from '../components/DiscoverRow'
 import { DiscoverSheet } from '../components/DiscoverSheet'
-import { metaFor } from '../lib/meta'
+import { metaFor, TYPE_ORDER } from '../lib/meta'
 import { useEdition } from '../lib/EditionContext'
 import {
   generateRecs, whyThis, loadBatch, saveBatch, addDismissal,
@@ -163,11 +163,16 @@ const CardSkeleton = ({ i }) => (
 
 export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem, onPushToRadarr }) => {
   const ed = useEdition()
+  const types = ed.types && ed.types.length ? ed.types : TYPE_ORDER
+  // The feed is TMDB's streaming rows, screen-only. A login with no movie or
+  // tv in its types (lib/settings.js) has no use for it: no tab, and the page
+  // lands on "For you" instead.
+  const hasFeed = types.includes('movie') || types.includes('tv')
   const [batch, setBatch] = useState(() => loadBatch())
   const [generating, setGenerating] = useState(false)
   // The feed is the landing view — the tab opens on "what's out there", the way
   // Overseerr does. Asking for a recommendation switches to `net`.
-  const [view, setView] = useState('feed')     // feed | net | backlog
+  const [view, setView] = useState(hasFeed ? 'feed' : 'net')     // feed | net | backlog
   const [sheetEntry, setSheetEntry] = useState(null) // tapped discover tile
   // Bumped by the feed's ↻ — remounts the rows so they refetch after the cache
   // has been dropped.
@@ -184,7 +189,7 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
     setGenerating(true)
     setActiveSeed(s)
     try {
-      const b = await generateRecs({ seed: s, items, partner, edition: ed.label })
+      const b = await generateRecs({ seed: s, items, partner, edition: ed.label, types })
       setBatch(b)
       saveBatch(b)
       setView('net')
@@ -349,10 +354,10 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
         {/* feed ⇄ net-new ⇄ backlog toggle + refresh */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto', scrollbarWidth: 'none' }}>
           {[
-            ['feed', 'Feed'],
+            hasFeed && ['feed', 'Feed'],
             ['net', `For you${visibleNet.length ? ` · ${visibleNet.length}` : ''}`],
             ['backlog', `Your queue${backlogItems.length ? ` · ${backlogItems.length}` : ''}`],
-          ].map(([v, label]) => (
+          ].filter(Boolean).map(([v, label]) => (
             <button key={v} onClick={() => setView(v)} style={{
               ...btnTextChip(view === v), flexShrink: 0,
             }}>{label}</button>

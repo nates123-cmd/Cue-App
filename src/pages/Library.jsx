@@ -91,7 +91,11 @@ export const searchText = (item) => {
 
 export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete, onRequestFinish, onToggleShortlist }) => {
   const ed = useEdition()
-  const partner = ed.partner || 'Amanda'
+  // null = this login has the "with <partner>" UI switched off (lib/settings.js).
+  const partner = ed.partner || null
+  // The types this login sees. One type: no tab strip, the page just IS that shelf.
+  const types = ed.types && ed.types.length ? ed.types : TYPE_ORDER
+  const singleType = types.length === 1 ? types[0] : null
   const [typeFilter, setTypeFilter] = useState('all')
   // Default to the working set — queued + active. 'done' stays selectable but
   // hidden by default so finishing an item drops it out of the list.
@@ -173,7 +177,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
     statusFilter !== 'open' && { key: 'status', label: statusFilter, clear: () => setStatusFilter('open') },
     lengthFilter !== 'all' && { key: 'length', label: lengthFilter, clear: () => setLengthFilter('all') },
     from !== 'all' && { key: 'from', label: `from ${from}`, clear: () => setFrom('all') },
-    together === 'with' && { key: 'with', label: 'Nate and Amanda', clear: () => setTogether('all') },
+    together === 'with' && { key: 'with', label: `with ${partner}`, clear: () => setTogether('all') },
     together === 'solo' && { key: 'solo', label: 'solo', clear: () => setTogether('all') },
     genreFilter !== 'all' && { key: 'genre', label: genreFilter, clear: () => setGenreFilter('all') },
   ].filter(Boolean)
@@ -190,8 +194,8 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
           { label: 'Saved', value: items.filter((i) => i.status !== 'done').length, onClick: () => setStatusFilter('open') },
           { label: 'Now', value: items.filter((i) => i.status === 'active').length, onClick: () => setStatusFilter('active') },
           { label: 'Finished', value: items.filter((i) => i.status === 'done').length, onClick: () => setStatusFilter('done') },
-          { label: `With ${partner}`, value: items.filter((i) => (i.with || []).includes(partner)).length, onClick: () => setTogether('with') },
-        ]}
+          partner && { label: `With ${partner}`, value: items.filter((i) => (i.with || []).includes(partner)).length, onClick: () => setTogether('with') },
+        ].filter(Boolean)}
         right={
           <button onClick={() => onSetDensity(density === 'grid' ? 'list' : 'grid')} style={{
             ...btnGhost, padding: '5px 9px', fontSize: 12,
@@ -199,12 +203,13 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
         }
       />
 
-      {/* Type tabs: Letterboxd's text tab strip, signal underline on the live one. */}
-      <div style={{
+      {/* Type tabs: Letterboxd's text tab strip, signal underline on the live one.
+          A single-type login gets no strip at all. */}
+      {!singleType && <div style={{
         display: 'flex', gap: 18, overflowX: 'auto', scrollbarWidth: 'none',
         padding: '0 20px', borderBottom: '1px solid var(--hairline)',
       }}>
-        {['all', ...TYPE_ORDER].map((t) => {
+        {['all', ...types].map((t) => {
           const on = typeFilter === t
           return (
             <button key={t} onClick={() => setTypeFilter(t)} style={{
@@ -216,7 +221,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
             }}>{t === 'all' ? 'All' : TYPE_META[t].plural}</button>
           )
         })}
-      </div>
+      </div>}
 
       <div style={{ padding: '14px 20px 0' }}>
           <div style={{ position: 'relative' }}>
@@ -340,7 +345,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
               ))}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {partner && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <Mono size={9} dim style={{ minWidth: 48 }}>Watching</Mono>
               <button onClick={() => setTogether('all')} style={btnTextChip(together === 'all')}>any</button>
               <button onClick={() => setTogether('solo')} style={btnTextChip(together === 'solo')}>solo</button>
@@ -349,9 +354,9 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
                 display: 'inline-flex', alignItems: 'center', gap: 5,
               }}>
                 <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 12, lineHeight: 0.7, transform: 'translateY(-1px)' }}>&amp;</span>
-                Nate and Amanda
+                with {partner}
               </button>
-            </div>
+            </div>}
 
             {availableGenres.length > 0 && (
               <div style={{
@@ -380,7 +385,7 @@ export const LibraryPage = ({ items, onOpenItem, density, onSetDensity, onDelete
 
       <div style={{ padding: '6px 20px 4px' }}>
         <SectionHead
-          title={q ? `Matching “${query.trim()}”` : from !== 'all' ? `From ${from}` : sort === 'up next' ? 'Up next' : TYPE_META[typeFilter]?.plural || 'Everything'}
+          title={q ? `Matching “${query.trim()}”` : from !== 'all' ? `From ${from}` : sort === 'up next' ? 'Up next' : TYPE_META[typeFilter]?.plural || (singleType ? TYPE_META[singleType].plural : 'Everything')}
           right={`${filtered.length} of ${items.length}`}
         />
       </div>

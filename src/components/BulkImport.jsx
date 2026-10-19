@@ -4,6 +4,7 @@ import { TypeIcon } from './TypeIcon'
 import { btnGhost, btnPrimary } from './primitives'
 import { TYPE_META, TYPE_ORDER } from '../lib/meta'
 import { enrich } from '../lib/enrichment'
+import { useEdition } from '../lib/EditionContext'
 
 const KNOWN_TYPES = new Set(TYPE_ORDER)
 
@@ -83,6 +84,8 @@ const RowLine = ({ row }) => (
 )
 
 export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', onDone }) => {
+  const ed = useEdition()
+  const types = ed.types && ed.types.length ? ed.types : TYPE_ORDER
   const [text, setText] = useState('')
   const [type, setType] = useState(defaultType)
   const [withPartner, setWithPartner] = useState(false)
@@ -113,7 +116,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
       try {
         const enriched = await enrich(row.title, row.type)
         enriched.recommended_by = row.recommended_by
-        enriched.with = withPartner ? [partner] : []
+        enriched.with = withPartner && partner ? [partner] : []
         enriched.status = 'queued'
         await onAdd(enriched)
         if (!cancelRef.current) patchRow(i, { status: 'done' })
@@ -167,8 +170,8 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
             <Mono size={9} dim style={{ display: 'block', marginBottom: 6 }}>
               Default type (for lines with no type)
             </Mono>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-              {TYPE_ORDER.map((t) => (
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(3, types.length)}, 1fr)`, gap: 6 }}>
+              {types.map((t) => (
                 <button key={t} onClick={() => setType(t)} style={{
                   appearance: 'none', cursor: 'pointer',
                   padding: '8px 4px', borderRadius: 3,
@@ -187,7 +190,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <button
+            {partner && <button
               type="button"
               onClick={() => setWithPartner((v) => !v)}
               title={`Add the whole batch to the shared list with ${partner}`}
@@ -202,7 +205,7 @@ export const BulkImport = ({ onAdd, defaultType = 'book', partner = 'Amanda', on
               }}>
               <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
               <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'inherit' }}>{partner}</span>
-            </button>
+            </button>}
             <span style={{ flex: 1 }} />
             <Mono size={9} dim>{preview.length} item{preview.length === 1 ? '' : 's'}</Mono>
             <button onClick={start} style={{

@@ -595,7 +595,7 @@ export const ItemDetail = ({
             </div>
           </div>
 
-          <TogetherRow item={item} partner={partner} onToggle={readOnly ? undefined : onToggleWith} />
+          {partner && <TogetherRow item={item} partner={partner} onToggle={readOnly ? undefined : onToggleWith} />}
           </PickCard>
 
           {/* Review: rating + your take + the insights it left you with */}

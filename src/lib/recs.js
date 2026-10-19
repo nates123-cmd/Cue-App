@@ -87,26 +87,29 @@ function buildExcluder(items, dismissed) {
 }
 
 // ── Claude: propose (nl / surprise) ───────────────────────────────────────────
-async function claudePropose({ seed, items, partner, edition }, n) {
+async function claudePropose({ seed, items, partner, edition, types }, n) {
   const taste = tasteProfile(items)
   const dismissed = [...loadDismissals()].map((k) => k.split('|')[0]).slice(0, 30)
+  // The types this login sees (lib/settings.js). One type means no "spread".
+  const allowed = Array.isArray(types) && types.length ? types.filter((t) => TYPES.includes(t)) : TYPES
+  const multi = allowed.length > 1
   const ask = seed.kind === 'nl'
     ? `They asked, in their own words: "${seed.query}"`
-    : `No query — this is a one-tap "Surprise me". Seed on the whole-library taste profile below and the time of day. Spread across several media types; favor a couple of bolder, less-obvious picks.`
+    : `No query — this is a one-tap "Surprise me". Seed on the whole-library taste profile below and the time of day. ${multi ? 'Spread across several media types; favor' : 'Favor'} a couple of bolder, less-obvious picks.`
   const prompt = `You are the taste curator for Cue, a personal recommendation library.
 ${ask}
 
 Their taste:
 ${taste.text}
 
-Co-viewing partner: ${partner || 'Amanda'}. Current edition: ${edition || 'evening'}.
+Co-viewing partner: ${partner || 'none'}. Current edition: ${edition || 'evening'}.
 ${dismissed.length ? `Already dismissed (do NOT repeat): ${dismissed.join(', ')}` : ''}
 
-Propose ${n} SPECIFIC, real, findable titles they do NOT already own, mixed across
-[${TYPES.join(', ')}]. Match their taste; for "${edition}" lean ${edition === 'morning' ? 'contemplative / reading' : edition === 'afternoon' ? 'mixed / productive' : edition === 'evening' ? 'cinema, prestige tv' : 'shorter, quieter'}.
+Propose ${n} SPECIFIC, real, findable titles they do NOT already own, ${multi ? 'mixed across' : 'ONLY of type'}
+[${allowed.join(', ')}]. Match their taste; for "${edition}" lean ${edition === 'morning' ? 'contemplative / reading' : edition === 'afternoon' ? 'mixed / productive' : edition === 'evening' ? 'cinema, prestige tv' : 'shorter, quieter'}.
 
 Return ONLY a JSON array (no prose, no markdown), exactly ${n} objects:
-[{"title":"...","type":"book|tv|movie|article|video|podcast|music","reason":"why it fits them, under 70 chars, lowercase, no period"}]`
+[{"title":"...","type":"${allowed.join('|')}","reason":"why it fits them, under 70 chars, lowercase, no period"}]`
   try {
     const raw = await claudeComplete(prompt, { max_tokens: 900 })
     const parsed = extractJSON(raw)
@@ -218,9 +221,14 @@ function rankBacklog(items, seed, n) {
 // ── the pipeline ──────────────────────────────────────────────────────────────
 // seed = { kind: 'nl'|'surprise'|'item', query?, item? }
 // Returns a batch: { id, seed, createdAt, netNew: [suggestion], backlog: [item] }.
-export async function generateRecs({ seed, items, partner, edition }) {
+export async function generateRecs({ seed, items, partner, edition, types }) {
   const dismissed = loadDismissals()
-  const keep = buildExcluder(items, dismissed)
+  const excl = buildExcluder(items, dismissed)
+  // Belt and braces for a narrowed login: the prompt already asks for these
+  // types only, but a model that strays must not put a movie in front of a
+  // books-only reader. Absent / full set = no extra filtering.
+  const allowed = Array.isArray(types) && types.length && types.length < TYPES.length ? new Set(types) : null
+  const keep = allowed ? (c) => excl(c) && allowed.has(c.type) : excl
 
   // 1–4: net-new candidates → exclude → taste layer.
   let netNew = []
@@ -232,10 +240,10 @@ export async function generateRecs({ seed, items, partner, edition }) {
       // No DB similarity for this type (video/article) or DB came up empty —
       // fall back to a Claude proposal seeded on the anchor.
       const nlSeed = { kind: 'nl', query: `more like "${seed.item.title}" (${seed.item.type})` }
-      netNew = (await claudePropose({ seed: nlSeed, items, partner, edition }, NET_NEW_TARGET)).filter(keep)
+      netNew = (await claudePropose({ seed: nlSeed, items, partner, edition, types }, NET_NEW_TARGET)).filter(keep)
     }
   } else {
-    netNew = (await claudePropose({ seed, items, partner, edition }, NET_NEW_TARGET + 4)).filter(keep)
+    netNew = (await claudePropose({ seed, items, partner, edition, types }, NET_NEW_TARGET + 4)).filter(keep)
     netNew = netNew.slice(0, NET_NEW_TARGET)
   }
 
