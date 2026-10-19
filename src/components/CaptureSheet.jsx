@@ -76,19 +76,26 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
     return card
   }
 
+  // Typed-type search. This used to enrich the top hit straight away and show
+  // the card with the other matches underneath, which meant the wrong edition
+  // or a same-title book got enriched (one Claude call) and the person then
+  // had to notice and re-pick. Now: two or more matches -> show the list and
+  // enrich only what gets picked, the same as Auto. A single match, or none,
+  // still goes straight to the card, since there is nothing to choose.
   const submit = async () => {
     const q = title.trim()
     if (!q) return
     if (auto) return submitAuto(q)
-    setEnrichingTitle(q); setSaveErr(null)
-    setPhase('enriching'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
-    const [enriched, cands] = await Promise.all([
-      enrich(q, type),
-      searchCandidates(type, q).catch(() => []),
-    ])
+    setSaveErr(null); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
+    setPhase('picking')
+    const cands = await searchCandidates(type, q).catch(() => [])
+    if (cands.length >= 2) { setCandidates(cands); return }
+    const only = cands[0] || null
+    setEnrichingTitle(only ? only.title : q)
+    setPhase('enriching')
+    const enriched = await enrich(only ? only.title : q, type, only || undefined)
     setDraft(decorate(enriched))
     setPhase('draft')
-    if (cands.length >= 2) { setCandidates(cands); setPickedKey(cands[0].key) }
   }
 
   // Auto: search across media types, show the cross-type picker, no draft yet —
@@ -252,7 +259,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                     <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{partner}</span>
                   </button>}
                   <span style={{ flex: 1 }} />
-                  <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>{phase === 'picking' ? 'Searching…' : auto ? 'Match ↵' : 'Enrich ↵'}</button>
+                  <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>{phase === 'picking' && candidates.length === 0 ? 'Searching…' : auto ? 'Match ↵' : 'Enrich ↵'}</button>
                 </div>
               </div>
 
