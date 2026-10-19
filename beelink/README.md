@@ -85,6 +85,34 @@ second person to want a book still gets their own copy.
 - `detail.force_kindle: true` on a request mails it regardless, for when a book
   has been deleted off the device and is genuinely wanted again.
 
+## cue-finish: devices close the loop (added 2026-10-19)
+
+`cue-finish.py` runs on the box as the user unit `cue-finish.service`
+(`~/apps/cue-finish/`, 120 s poll). It asks the devices what Nate actually did
+and moves the Cue card to match, mirroring the app's own Finish action
+(`recommendations` status / `finished_at` / `consumed_at` + a `media_entries`
+row, rating left empty). It stamps `fulfillment.progress`
+(`{state: started|done, source: kindle|jellyfin, pct, event_at}`), which Cue
+renders as "Reading 34%" / "Read · Kindle" / "Watched · Jellyfin".
+
+| signal | finished | started |
+|---|---|---|
+| KOReader (Kindle) | sidecar `summary.status = "complete"` (Mark as finished), read over ssh whenever :2222 answers; or kosync percentage >= `FINISH_PCT` (0.99) | kosync percentage >= `START_PCT` (0.02) |
+| Jellyfin movie | `UserData.Played` | a resume position |
+| Jellyfin series | every episode on the server played | any episode played or resumable |
+
+Guards: the device event must postdate the card's `created_at` (a film watched
+last year and queued last week is a re-watch wish); `done` is never moved
+backwards; `progress.event_at` remembers the device timestamp that moved the
+card, so an undo in Cue sticks until the device reports something new.
+
+Config lives in `~/apps/cue-finish/cue-finish.env` on top of `bridge.env` and
+`reading-sync.env`: `CUE_USER_ID` (Nate's `recommendations.user_id`),
+`JELLYFIN_USER_ID` (**the household watches as `root`, not `nate`**),
+`KINDLE_HOST`. Deploy: `scp beelink/cue-finish.py nate@100.111.77.98:apps/cue-finish/`
+then `systemctl --user restart cue-finish`. `--dry-run` prints what would move.
+Tests: `python3 beelink/test_cue_finish.py`.
+
 ## Landmines
 
 - **Prowlarr seeder counts are stale.** They're scraped off the indexer page,

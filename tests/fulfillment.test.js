@@ -11,6 +11,54 @@ import {
   fulfillmentBadges, hasFulfillment, initialFulfillment, isFullyFulfilled, legBadge,
 } from '../src/lib/fulfillment.js'
 
+describe('legBadge — device progress leg (cue-finish daemon)', () => {
+  it('names the device that said the book was finished', () => {
+    const b = legBadge('progress', { state: 'done', source: 'kindle', detail: 'Marked finished in KOReader', event_at: '2026-10-19T01:02:03Z' })
+    expect(b.label).toBe('Read · Kindle')
+    expect(b.short).toBe('Read')
+    expect(b.tone).toBe('done')
+    expect(b.title).toBe('Marked finished in KOReader')
+  })
+
+  it('reads a watched film off Jellyfin', () => {
+    const b = legBadge('progress', { state: 'done', source: 'jellyfin', detail: 'Watched on Jellyfin' })
+    expect(b.label).toBe('Watched · Jellyfin')
+    expect(b.tone).toBe('done')
+  })
+
+  it('shows reading progress as in-flight with the Kindle percentage', () => {
+    const b = legBadge('progress', { state: 'started', source: 'kindle', pct: 34 })
+    expect(b.label).toBe('Reading 34%')
+    expect(b.short).toBe('34%')
+    expect(b.tone).toBe('go')
+    expect(b.title).toBe('Reading on Kindle')
+  })
+
+  it('shows a series in progress without a percentage', () => {
+    const b = legBadge('progress', { state: 'started', source: 'jellyfin', detail: '3 episodes watched on Jellyfin' })
+    expect(b.label).toBe('Watching')
+    expect(b.tone).toBe('go')
+    expect(b.title).toBe('3 episodes watched on Jellyfin')
+  })
+
+  it('a daemon state this app has never seen degrades to a quiet wait badge', () => {
+    const b = legBadge('progress', { state: 'abandoned', source: 'kindle' })
+    expect(b.tone).toBe('wait')
+    expect(b.label).toBe('Progress abandoned')
+  })
+
+  it('a book being read keeps the card out of the fully-fulfilled treatment', () => {
+    const item = { fulfillment: {
+      ebook: { state: 'delivered' }, audiobook: { state: 'delivered' }, place: { state: 'ready' },
+      progress: { state: 'started', source: 'kindle', pct: 10 },
+    } }
+    expect(isFullyFulfilled(item)).toBe(false)
+    expect(fulfillmentBadges(item).map((b) => b.key)).toEqual(['ebook', 'audiobook', 'place', 'progress'])
+    item.fulfillment.progress = { state: 'done', source: 'kindle' }
+    expect(isFullyFulfilled(item)).toBe(true)
+  })
+})
+
 describe('legBadge — one pipeline leg → one badge', () => {
   it('returns null for a leg that was never attempted', () => {
     expect(legBadge('ebook', undefined)).toBeNull()

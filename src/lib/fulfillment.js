@@ -22,17 +22,23 @@
 //   place     — epub indexed by epubpos + published to `reading_books`, so the
 //               Place PWA can push a reading position to the X4 / audiobook
 //   download  — movie/tv equivalent (single leg, Radarr/Sonarr)
+//   progress  — what the devices say Nate actually did with it. Stamped by the
+//               cue-finish daemon off KOReader (kosync percentage + "Mark as
+//               finished") and Jellyfin (played state): `started` while it is
+//               being read / watched, `done` once finished. `source` is
+//               'kindle' or 'jellyfin'; `pct` rides along for books.
 
 // Tone drives colour. 'go' is in-flight, 'done' landed, 'fail' needs Nate.
 const TONES = { wait: 'wait', go: 'go', done: 'done', fail: 'fail' }
 
-const LEG_ORDER = ['ebook', 'audiobook', 'place', 'download']
+const LEG_ORDER = ['ebook', 'audiobook', 'place', 'download', 'progress']
 
 const LEG_LABEL = {
   ebook: 'Ebook',
   audiobook: 'Audiobook',
   place: 'Place',
   download: 'Download',
+  progress: 'Progress',
 }
 
 // Short form for the 2-up Library grid, where a card is ~160px wide.
@@ -41,7 +47,10 @@ const LEG_SHORT = {
   audiobook: 'Audio',
   place: 'Place',
   download: 'DL',
+  progress: 'Read',
 }
+
+const SOURCE_NAME = { kindle: 'Kindle', jellyfin: 'Jellyfin' }
 
 function pctOf(leg) {
   const p = Number(leg?.pct)
@@ -60,6 +69,22 @@ export function legBadge(key, leg) {
   // through the public proxy); only the ABS delivery path sets it.
   const url = typeof leg.url === 'string' && /^https?:\/\//.test(leg.url) ? leg.url : null
   const mk = (label, tone, title) => ({ key, label, short, tone, title: title || label, at, pct, url })
+
+  // The device-progress leg has its own vocabulary: a book is read, a film is
+  // watched, and the label names the device so Nate knows who said so.
+  if (key === 'progress') {
+    const src = SOURCE_NAME[leg.source] || null
+    const verb = leg.source === 'kindle' ? 'Read' : 'Watched'
+    const going = leg.source === 'kindle' ? 'Reading' : 'Watching'
+    if (leg.state === 'done') {
+      return { ...mk(src ? `${verb} · ${src}` : 'Finished', TONES.done, leg.detail || `Finished on ${src || 'device'}`), short: verb }
+    }
+    if (leg.state === 'started') {
+      const label = pct != null ? `${going} ${pct}%` : going
+      return { ...mk(label, TONES.go, leg.detail || (src ? `${going} on ${src}` : going)), short: pct != null ? `${pct}%` : going }
+    }
+    return mk(`${name} ${leg.state}`, TONES.wait)
+  }
 
   switch (leg.state) {
     case 'searching':
