@@ -672,15 +672,19 @@ export async function searchCandidates(type, query) {
 // we interleave across types (round-robin by rank) so the picker shows a spread
 // — most-popular movie, top show, top book… — instead of all movies first.
 // URLs are exact (an article/video link), so auto returns [].
-export async function searchCandidatesAuto(query) {
+// `types` narrows the lanes to this login's media types (lib/settings.js);
+// a lane outside it is never queried, so a books-only reader costs no TMDB
+// calls and sees no screen candidates. Absent means every lane, as before.
+export async function searchCandidatesAuto(query, types) {
   const q = (query || '').trim()
   if (!q || URL_RE.test(q)) return []
 
+  const want = (t) => !Array.isArray(types) || types.length === 0 || types.includes(t)
   const [movie, tv, book, music] = await Promise.all([
-    tmdbSearch(q, 'movie').catch(() => []),
-    tmdbSearch(q, 'tv').catch(() => []),
-    googleBooksSearch(q).catch(() => []).then((gb) => gb.length ? gb : openLibrarySearch(q).catch(() => [])),
-    musicBrainzSearch(q).catch(() => []),
+    want('movie') ? tmdbSearch(q, 'movie').catch(() => []) : [],
+    want('tv') ? tmdbSearch(q, 'tv').catch(() => []) : [],
+    want('book') ? googleBooksSearch(q).catch(() => []).then((gb) => gb.length ? gb : openLibrarySearch(q).catch(() => [])) : [],
+    want('music') ? musicBrainzSearch(q).catch(() => []) : [],
   ])
 
   // Normalize each source's hits, tagged with their type.

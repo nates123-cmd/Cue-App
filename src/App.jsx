@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EditionContext } from './lib/EditionContext'
-import { editionForHour, formatClock, PARTNER } from './lib/meta'
+import { editionForHour, formatClock, TYPE_ORDER } from './lib/meta'
 import { initialFulfillment } from './lib/fulfillment'
 import { useItems, pushTarget, toSeason } from './lib/items'
 import { supabase } from './lib/supabase'
+import { loadPrefs, typesRestricted } from './lib/settings'
 import { backfillMissingImages, enrichCaptured } from './lib/backfill'
 import { BottomNav } from './components/Masthead'
 import { ItemDetail } from './components/ItemDetail'
@@ -24,10 +25,30 @@ export default function App() {
   const [finishTarget, setFinishTarget] = useState(null) // item awaiting rating+notes
   const [backfillStatus, setBackfillStatus] = useState(null) // { index, total, title }
 
+  // Per-login chrome preferences (which media types to show, co-viewing
+  // partner). null until the one-shot read lands; the pages wait for it so a
+  // books-only reader never flashes the full seven-type UI.
+  const [prefs, setPrefs] = useState(null)
+  useEffect(() => {
+    let alive = true
+    loadPrefs().then((p) => { if (alive) setPrefs(p) })
+    return () => { alive = false }
+  }, [])
+  const types = prefs?.types || null
+  const partner = prefs ? prefs.partner : null
+
   const {
-    items, loading, addItem, updateItem, deleteItem, finishItem, reload,
+    items: allItems, loading, addItem, updateItem, deleteItem, finishItem, reload,
     refreshFulfillment, setShortlist, toggleShortlist,
   } = useItems()
+
+  // A narrowed login only sees rows of its types. Nothing is deleted or
+  // re-typed; the other rows are simply out of frame for this person.
+  const items = useMemo(() => {
+    if (!types || !typesRestricted(types)) return allItems
+    const allow = new Set(types)
+    return allItems.filter((i) => allow.has(i.type))
+  }, [allItems, types])
 
   // Poll the pipeline column while anything is still in flight. Goes quiet once
   // every leg has landed (or failed), so a settled library costs nothing.
@@ -154,8 +175,9 @@ export default function App() {
   }
 
   const onToggleWith = async (item) => {
+    if (!partner) return
     const cur = item.with || []
-    const next = cur.includes(PARTNER) ? cur.filter((n) => n !== PARTNER) : [...cur, PARTNER]
+    const next = cur.includes(partner) ? cur.filter((n) => n !== partner) : [...cur, partner]
     await updateItem(item.id, { with: next })
     setOpenItem((prev) => (prev && prev.id === item.id ? { ...prev, with: next } : prev))
   }
@@ -301,7 +323,8 @@ export default function App() {
       label: edition.label,
       timeLabel: formatClock(now),
       isPaper: resolvedPaper,
-      partner: PARTNER,
+      partner,
+      types: types || TYPE_ORDER,
     }}>
       <div style={{
         ...groundCfg,
@@ -321,10 +344,10 @@ export default function App() {
         transition: 'background 600ms ease, color 600ms ease',
       }}>
         <div style={{ position: 'relative', zIndex: 2, paddingBottom: 120 }}>
-          {page === 'recs' && (
+          {prefs && page === 'recs' && (
             <RecsPage
               items={items}
-              partner={PARTNER}
+              partner={partner}
               seed={recsSeed}
               onClearSeed={() => setRecsSeed(null)}
               onAdd={onAdd}
@@ -332,7 +355,7 @@ export default function App() {
               onPushToRadarr={pushToRadarr}
             />
           )}
-          {page === 'library' && (
+          {prefs && page === 'library' && (
             <LibraryPage
               items={items}
               onOpenItem={setOpenItem}
@@ -343,7 +366,7 @@ export default function App() {
               onToggleShortlist={toggleShortlist}
             />
           )}
-          {page === 'active' && (
+          {prefs && page === 'active' && (
             <ActivePage
               items={items}
               onBump={onBump}
@@ -355,7 +378,7 @@ export default function App() {
           )}
         </div>
 
-        {loading && items.length === 0 && (
+        {(!prefs || (loading && items.length === 0)) && (
           <div style={{
             position: 'fixed', inset: 0, zIndex: 5,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -423,7 +446,7 @@ export default function App() {
             onDelete={onDelete}
             onPushToRadarr={pushToRadarr}
             onMoreLikeThis={onMoreLikeThis}
-            partner={PARTNER}
+            partner={partner}
             recommenders={recommenders}
           />
         )}
@@ -440,7 +463,7 @@ export default function App() {
           onAdd={onAdd}
           onPushToRadarr={pushToRadarr}
           recommenders={recommenders}
-          partner={PARTNER}
+          partner={partner}
         />
 
         <FinishSheet

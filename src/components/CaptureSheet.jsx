@@ -15,10 +15,14 @@ import { enrich, pickSeason, searchCandidates, searchCandidatesAuto } from '../l
 
 export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommenders = [], partner = 'Amanda' }) => {
   const ed = useEdition()
+  // The types this login sees (lib/settings.js). Book is first in the registry,
+  // so the default type is unchanged for anyone with the full set.
+  const types = ed.types && ed.types.length ? ed.types : TYPE_ORDER
+  const firstType = types[0]
   const [mode, setMode] = useState('single')      // single | bulk
   const [title, setTitle] = useState('')
-  const [type, setType] = useState('book')
-  const [auto, setAuto] = useState(true)           // Auto = search across all media types, pick locks the type
+  const [type, setType] = useState(firstType)
+  const [auto, setAuto] = useState(true)           // Auto = search across this login's media types, pick locks the type
   const [recommendedBy, setRecommendedBy] = useState('me')
   const [withPartner, setWithPartner] = useState(false)
   const [phase, setPhase] = useState('idle')       // idle | picking | enriching | draft
@@ -52,7 +56,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
   // Reset everything when the sheet closes.
   useEffect(() => {
     if (!open) {
-      setMode('single'); setTitle(''); setType('book'); setAuto(true); setRecommendedBy('me')
+      setMode('single'); setTitle(''); setType(firstType); setAuto(true); setRecommendedBy('me')
       setWithPartner(false); setPhase('idle'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
       setEnrichingTitle(''); setSaving(false); setSaveErr(null); setPushState(null); setSeasonBusy(false)
     }
@@ -67,7 +71,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
 
   const decorate = (card) => {
     card.recommended_by = recommendedBy
-    card.with = withPartner ? [partner] : []
+    card.with = withPartner && partner ? [partner] : []
     card.status = 'queued'
     return card
   }
@@ -91,7 +95,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
   // the type is unknown until a candidate is picked. A miss prompts a type pick.
   const submitAuto = async (q) => {
     setPhase('picking'); setDraft(null); setCandidates([]); setPickedKey(null); setAutoMiss(false)
-    const cands = await searchCandidatesAuto(q).catch(() => [])
+    const cands = await searchCandidatesAuto(q, types).catch(() => [])
     if (cands.length) { setCandidates(cands); setPhase('picking') }
     else { setPhase('idle'); setAutoMiss(true) }
   }
@@ -225,8 +229,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                   <Mono size={8} dim>{auto ? 'or pick a type' : 'type'}</Mono>
                   <span style={{ flex: 1, height: 1, background: 'var(--hairline)' }} />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, opacity: auto ? 0.5 : 1, transition: 'opacity 160ms' }}>
-                  {TYPE_ORDER.map((t) => (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(3, types.length)}, 1fr)`, gap: 6, opacity: auto ? 0.5 : 1, transition: 'opacity 160ms' }}>
+                  {types.map((t) => (
                     <TypeChip key={t} type={t} active={!auto && type === t} onClick={() => chooseType(t)} />
                   ))}
                 </div>
@@ -236,8 +240,8 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
                   <Mono size={9} dim>From</Mono>
                   <RecommenderPicker value={recommendedBy} onChange={setRecommendedBy} recommenders={recommenders} />
-                  <span style={{ width: 1, height: 10, background: 'var(--hairline-strong)' }} />
-                  <button type="button" onClick={() => setWithPartner((v) => !v)} style={{
+                  {partner && <span style={{ width: 1, height: 10, background: 'var(--hairline-strong)' }} />}
+                  {partner && <button type="button" onClick={() => setWithPartner((v) => !v)} style={{
                     appearance: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5,
                     padding: '4px 9px 4px 7px', borderRadius: 999,
                     background: withPartner ? 'color-mix(in oklab, var(--signal) 16%, transparent)' : 'transparent',
@@ -246,7 +250,7 @@ export const CaptureSheet = ({ open, onClose, onAdd, onPushToRadarr, recommender
                   }}>
                     <span style={{ fontFamily: 'var(--note)', fontStyle: 'italic', fontSize: 14, lineHeight: 0.7, transform: 'translateY(1px)' }}>&amp;</span>
                     <span style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{partner}</span>
-                  </button>
+                  </button>}
                   <span style={{ flex: 1 }} />
                   <button onClick={submit} style={{ ...btnPrimary, opacity: title.trim() ? 1 : 0.3, pointerEvents: title.trim() ? 'auto' : 'none' }}>{phase === 'picking' ? 'Searching…' : auto ? 'Match ↵' : 'Enrich ↵'}</button>
                 </div>
