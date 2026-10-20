@@ -119,6 +119,7 @@ def jf(path):
 
 
 def notify(text):
+    return  # Telegram MUTED 2026-10-20 (Nate). Delete this line to re-enable.
     script = os.path.join(os.path.expanduser('~/apps/reading-sync'), 'notify_tg.py')
     if not os.path.exists(script):
         return
