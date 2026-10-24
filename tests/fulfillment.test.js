@@ -11,6 +11,18 @@ import {
   fulfillmentBadges, hasFulfillment, initialFulfillment, isFullyFulfilled, legBadge,
 } from '../src/lib/fulfillment.js'
 
+describe('legBadge — blocked', () => {
+  // Finished but the *arr will not import it (an .exe in the release). It is
+  // not in flight and it will not land on its own, so it must read as needing
+  // attention, never as 'downloading'.
+  it('reads an import-blocked download as a failure with the reason', () => {
+    const b = legBadge('download', { state: 'blocked', pct: 100, detail: "Found executable file with extension: '.exe'" })
+    expect(b.tone).toBe('fail')
+    expect(b.label).toBe('Download blocked')
+    expect(b.title).toMatch(/\.exe/)
+  })
+})
+
 describe('legBadge — one pipeline leg → one badge', () => {
   it('returns null for a leg that was never attempted', () => {
     expect(legBadge('ebook', undefined)).toBeNull()
