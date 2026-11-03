@@ -352,7 +352,7 @@ export async function fetchTrailerUrl(tmdbId, type) {
 // not the Times'). The Times can't be fetched from the browser, so the file is
 // the source and TMDB only supplies the poster, synopsis and tmdb_id that the
 // sheet's Queue / Download actions need.
-const NYT_MONTHS_SHOWN = 3
+const NYT_MONTHS_SHOWN = 6
 
 // The best TMDB search hit for a pick. Pure, so the matching is testable.
 // Prefer an exact (case-folded) title whose premiere year equals the pick's
@@ -436,23 +436,54 @@ export function nytLine(nyt) {
   return [nyt.service, nyt.season > 1 ? `S${nyt.season}` : null, shortDate(nyt.date)].filter(Boolean).join(' · ') || null
 }
 
-export function nytRows(blocks = NYT_PICKS) {
-  return [...blocks]
-    .sort((a, b) => b.month.localeCompare(a.month))
-    .slice(0, NYT_MONTHS_SHOWN)
-    .map((block) => ({
-      key: `nyt.${block.month}`,
-      title: `NYT picks · ${block.label}`,
-      kicker: 'New York Times',
-      fetch: () => fetchNytRow(block),
-    }))
+// The newest `n` monthly blocks: "the last six What to Watch articles".
+export function latestBlocks(blocks = NYT_PICKS, n = NYT_MONTHS_SHOWN) {
+  return [...blocks].sort((x, y) => y.month.localeCompare(x.month)).slice(0, n)
+}
+
+// Several months of picks flattened into one row: newest streaming date first,
+// and a title the Times picked twice (a new season, say) shown once.
+export function mergeNytEntries(lists) {
+  const seen = new Set()
+  return lists
+    .flat()
+    .sort((x, y) => String(y.facts?.nyt?.date || '').localeCompare(String(x.facts?.nyt?.date || '')))
+    .filter((e) => {
+      const k = `${e.type}:${e.title.toLowerCase().trim()}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+}
+
+// True when the library already holds this entry: same TMDB id, or failing
+// that the same type + title (the match the rest of the feed uses).
+export function isSaved(entry, libraryKeys) {
+  if (!entry || !libraryKeys) return false
+  const id = entry.facts?.tmdb_id
+  if (id != null && libraryKeys.has(`tmdb:${entry.type}:${id}`)) return true
+  return libraryKeys.has(`${entry.type}:${entry.title.toLowerCase().trim()}`)
+}
+
+// One "NYT picks" row over the last six months. `hideSaved` drops anything
+// already in the library, so the row is only what's still worth a look.
+export function nytRow(blocks = NYT_PICKS) {
+  const shown = latestBlocks(blocks)
+  if (!shown.length) return null
+  return {
+    key: 'nyt',
+    title: 'NYT picks',
+    kicker: 'New York Times',
+    hideSaved: true,
+    fetch: async () => mergeNytEntries(await Promise.all(shown.map((blk) => fetchNytRow(blk)))),
+  }
 }
 
 // The full feed definition, in render order. Each row lazily fetches itself so
 // the tab paints immediately and fills in as TMDB answers.
 export function feedRows() {
   return [
-    ...nytRows(),
+    ...[nytRow()].filter(Boolean),
     { key: 'trending', title: 'Trending this week', kicker: 'Everywhere', fetch: fetchTrendingRow },
     ...PROVIDERS.map((p) => ({
       key: `new.${p.key}`,

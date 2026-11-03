@@ -11,7 +11,7 @@ import { useEdition } from '../lib/EditionContext'
 import {
   generateRecs, whyThis, loadBatch, saveBatch, addDismissal,
 } from '../lib/recs'
-import { feedRows, hasTmdbKey, clearDiscoverCache, youtubeSearchUrl } from '../lib/discover'
+import { feedRows, hasTmdbKey, clearDiscoverCache, youtubeSearchUrl, isSaved } from '../lib/discover'
 
 const SOURCE_LABEL = { tmdb: 'TMDB', tastedive: 'TasteDive', backlog: 'Backlog', claude: 'Cue' }
 
@@ -274,13 +274,19 @@ export const RecsPage = ({ items, partner, seed, onClearSeed, onAdd, onOpenItem,
   // Titles already in the library, so the feed can mark them instead of
   // pretending they're new. Matched on type+title because a discover entry has
   // no Cue id — the same title-match the rest of the data layer uses.
-  const libraryKeys = useMemo(
-    () => new Set(items.map((i) => `${i.type}:${(i.title || '').toLowerCase().trim()}`)),
-    [items],
-  )
+  // TMDB-id keys too, so a saved title still matches when the feed spells it
+  // differently ("YAGA" vs "Yaga").
+  const libraryKeys = useMemo(() => {
+    const keys = new Set()
+    for (const i of items) {
+      keys.add(`${i.type}:${(i.title || '').toLowerCase().trim()}`)
+      const id = i.extension?.tmdb_id
+      if (id != null) keys.add(`tmdb:${i.type}:${id}`)
+    }
+    return keys
+  }, [items])
 
-  const inLibrary = (entry) =>
-    !!entry && libraryKeys.has(`${entry.type}:${entry.title.toLowerCase().trim()}`)
+  const inLibrary = (entry) => isSaved(entry, libraryKeys)
 
   // Queueing from the feed writes a real library row, carrying TMDB's facts
   // through as the extension so the card renders rich without a re-enrich.

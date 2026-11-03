@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickSearchMatch, shortDate, nytLine, nytRows } from '../src/lib/discover'
+import { pickSearchMatch, shortDate, nytLine, latestBlocks, nytRow, mergeNytEntries, isSaved } from '../src/lib/discover'
 import NYT_PICKS from '../src/data/nyt-picks.json'
 
 describe('pickSearchMatch', () => {
@@ -37,11 +37,29 @@ describe('nyt formatting', () => {
   })
 })
 
-describe('nytRows', () => {
-  it('newest month first, capped at three', () => {
-    const b = (month) => ({ month, label: month, picks: [] })
-    const rows = nytRows([b('2026-08'), b('2026-11'), b('2026-09'), b('2026-10')])
-    expect(rows.map((r) => r.key)).toEqual(['nyt.2026-11', 'nyt.2026-10', 'nyt.2026-09'])
+describe('NYT row', () => {
+  const b = (month) => ({ month, label: month, picks: [] })
+  it('latestBlocks keeps the newest six months', () => {
+    const months = ['2026-03', '2026-11', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-04']
+    expect(latestBlocks(months.map(b)).map((x) => x.month))
+      .toEqual(['2026-11', '2026-10', '2026-09', '2026-08', '2026-07', '2026-06'])
+  })
+  it('is one row called NYT picks that hides saved titles', () => {
+    const row = nytRow([b('2026-10')])
+    expect(row.title).toBe('NYT picks')
+    expect(row.hideSaved).toBe(true)
+    expect(nytRow([])).toBe(null)
+  })
+  it('mergeNytEntries: newest date first, a repeat title once', () => {
+    const e = (title, date) => ({ id: title + date, type: 'tv', title, facts: { nyt: { date } } })
+    const out = mergeNytEntries([[e('A', '2026-09-01'), e('B', '2026-09-20')], [e('C', '2026-10-05'), e('a', '2026-10-01')]])
+    expect(out.map((x) => x.title)).toEqual(['C', 'a', 'B'])
+  })
+  it('isSaved matches on tmdb id or type + title', () => {
+    const keys = new Set(['tmdb:tv:314360', 'movie:tenzing'])
+    expect(isSaved({ type: 'tv', title: 'Yaga', facts: { tmdb_id: 314360 } }, keys)).toBe(true)
+    expect(isSaved({ type: 'movie', title: 'Tenzing ', facts: {} }, keys)).toBe(true)
+    expect(isSaved({ type: 'tv', title: 'Tenzing', facts: {} }, keys)).toBe(false)
   })
   it('shipped data is well formed', () => {
     for (const block of NYT_PICKS) {
