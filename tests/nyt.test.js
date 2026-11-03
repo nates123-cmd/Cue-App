@@ -61,6 +61,15 @@ describe('NYT row', () => {
     expect(isSaved({ type: 'movie', title: 'Tenzing ', facts: {} }, keys)).toBe(true)
     expect(isSaved({ type: 'tv', title: 'Tenzing', facts: {} }, keys)).toBe(false)
   })
+  it('monthly job: format round-trips, merge replaces a month, validate gates', async () => {
+    const { formatPicks, mergeBlock, validateBlock } = await import('../scripts/nyt-monthly/nyt-monthly.mjs')
+    expect(JSON.parse(formatPicks(NYT_PICKS))).toEqual(NYT_PICKS)
+    const nov = { month: '2026-11', label: 'November', source: 'x', picks: [] }
+    const merged = mergeBlock(mergeBlock([b('2026-10')], nov), { ...nov, label: 'Nov2' })
+    expect(merged.map((x) => x.label)).toEqual(['2026-10', 'Nov2'])
+    expect(validateBlock(nov, '2026-11')).toContain('picks count 0')
+    expect(validateBlock(NYT_PICKS[0], NYT_PICKS[0].month)).toEqual([])
+  })
   it('shipped data is well formed', () => {
     for (const block of NYT_PICKS) {
       expect(block.month).toMatch(/^\d{4}-\d{2}$/)
