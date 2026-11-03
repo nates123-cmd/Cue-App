@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Cover, Mono } from './primitives'
 import { TypeIcon } from './TypeIcon'
+import { nytLine, isSaved } from '../lib/discover'
 
 // One horizontally-scrolling row of the Discover feed ("New on Netflix", …).
 //
@@ -26,6 +27,8 @@ function asCoverItem(entry) {
 const Tile = ({ entry, inLibrary, onOpen }) => {
   const f = entry.facts || {}
   const year = f.release_year || f.first_air_year || null
+  // An NYT pick says where and when it streams; every other row says the year.
+  const sub = nytLine(f.nyt) || year
   return (
     <button
       onClick={() => onOpen(entry)}
@@ -78,7 +81,7 @@ const Tile = ({ entry, inLibrary, onOpen }) => {
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
           overflow: 'hidden',
         }}>{entry.title}</div>
-        {year && <Mono size={8.5} dim>{year}</Mono>}
+        {sub && <Mono size={8.5} dim>{sub}</Mono>}
       </div>
     </button>
   )
@@ -124,9 +127,15 @@ export const DiscoverRow = ({ row, libraryKeys, onOpen }) => {
     return () => io.disconnect()
   }, [row])
 
+  // A hideSaved row (NYT picks) shows only what isn't in the library yet.
+  // Filtered at render, so queueing a pick drops it as soon as items update.
+  const shown = entries && row.hideSaved
+    ? entries.filter((e) => !isSaved(e, libraryKeys))
+    : entries
+
   // A row that came back empty is not an error worth showing — a provider
   // simply may have nothing new in the window. Collapse it silently.
-  if (entries && entries.length === 0 && !failed) return null
+  if (shown && shown.length === 0 && !failed) return null
 
   return (
     <section ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -157,11 +166,11 @@ export const DiscoverRow = ({ row, libraryKeys, onOpen }) => {
         >
           {entries === null
             ? [0, 1, 2, 3, 4].map((i) => <TileSkeleton key={i} i={i} />)
-            : entries.map((e) => (
+            : shown.map((e) => (
               <Tile
                 key={e.id}
                 entry={e}
-                inLibrary={libraryKeys.has(`${e.type}:${e.title.toLowerCase().trim()}`)}
+                inLibrary={isSaved(e, libraryKeys)}
                 onOpen={onOpen}
               />
             ))}
