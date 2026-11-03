@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
 const HOME = os.homedir()
 const CUE = `${HOME}/Developer/cue-app`
@@ -226,7 +227,9 @@ async function main() {
     block.picks.slice(0, 6).map((p) => `- ${p.title} (${p.service})`).join('\n'))
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL, not a template string: the installed copy lives under
+// "Application Support", and import.meta.url spells that space as %20.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => {
     log('ERROR', e.message)
     telegram(`Cue NYT picks job failed: ${e.message.slice(0, 300)}\nLog: ~/.local/state/cue-nyt/run.log`)
