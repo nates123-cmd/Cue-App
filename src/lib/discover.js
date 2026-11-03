@@ -16,6 +16,8 @@
 // rows surface new shows, not new seasons of existing ones. TMDB has no
 // discover filter for "season aired recently".
 
+import NYT_PICKS from '../data/nyt-picks.json'
+
 const API_KEY = import.meta.env.VITE_TMDB_KEY || import.meta.env.VITE_TMDB_API_KEY || ''
 const BASE = 'https://api.themoviedb.org/3'
 const IMG = (path, size = 'w500') => `https://image.tmdb.org/t/p/${size}${path}`
@@ -344,10 +346,113 @@ export async function fetchTrailerUrl(tmdbId, type) {
   return url
 }
 
+// ── NYT picks ────────────────────────────────────────────────
+// The NYT's monthly "best movies and TV coming to streaming" article, curated by
+// hand into src/data/nyt-picks.json (one block per month; the notes are ours,
+// not the Times'). The Times can't be fetched from the browser, so the file is
+// the source and TMDB only supplies the poster, synopsis and tmdb_id that the
+// sheet's Queue / Download actions need.
+const NYT_MONTHS_SHOWN = 3
+
+// The best TMDB search hit for a pick. Pure, so the matching is testable.
+// Prefer an exact (case-folded) title whose premiere year equals the pick's
+// year, then an exact title in any year, then a year match, then TMDB's first
+// result. `year` in the JSON is the SERIES premiere year for a later season.
+export function pickSearchMatch(results, pick) {
+  const list = (results || []).filter((r) => r && r.id != null)
+  if (!list.length) return null
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const want = norm(pick.title)
+  const nameOf = (r) => norm(pick.type === 'movie' ? r.title : r.name)
+  const yearOfR = (r) => yearOf(pick.type === 'movie' ? r.release_date : r.first_air_date)
+  const exact = list.filter((r) => nameOf(r) === want)
+  const yearHit = (r) => pick.year && yearOfR(r) === pick.year
+  return exact.find(yearHit) || exact[0] || list.find(yearHit) || list[0]
+}
+
+async function searchTmdb(pick) {
+  const qs = new URLSearchParams({ api_key: API_KEY, language: 'en-US', query: pick.title, include_adult: 'false' })
+  const res = await fetch(`${BASE}/search/${pick.type}?${qs}`).catch(() => null)
+  if (!res || !res.ok) return []
+  const data = await res.json().catch(() => null)
+  return data?.results || []
+}
+
+// One month's picks → feed entries. A pick TMDB can't place still shows, on
+// the designed cover, so a brand-new title never silently drops out of the row.
+export async function fetchNytRow(block) {
+  const cacheKey = `nyt.${block.month}`
+  const cached = readCache(cacheKey)
+  if (cached) return cached
+
+  const genreMap = API_KEY ? await loadGenreMap() : {}
+  const entries = await Promise.all(block.picks.map(async (pick) => {
+    const hit = API_KEY ? pickSearchMatch(await searchTmdb(pick), pick) : null
+    const base = hit ? toEntry(hit, pick.type, genreMap) : null
+    const nyt = {
+      note: pick.note || null,
+      service: pick.service || null,
+      date: pick.date || null,
+      season: pick.season || null,
+      source: block.source || null,
+    }
+    if (base) {
+      return { ...base, id: `nyt:${block.month}:${base.id}`, title: pick.title, facts: { ...base.facts, nyt } }
+    }
+    return {
+      id: `nyt:${block.month}:${pick.type}:${pick.title}`,
+      title: pick.title,
+      type: pick.type,
+      date: pick.date || null,
+      popularity: 0,
+      facts: {
+        synopsis: null,
+        image_url: null,
+        ...(pick.type === 'movie' ? { release_year: pick.year || null } : { first_air_year: pick.year || null }),
+        nyt,
+      },
+    }
+  }))
+
+  // Release order inside the month, earliest first: the row reads as a calendar.
+  entries.sort((a, b) => String(a.facts.nyt.date || '').localeCompare(String(b.facts.nyt.date || '')))
+  // Only cache a fully-resolved row, so a TMDB blip retries on the next visit.
+  if (entries.every((e) => e.facts.tmdb_id != null)) writeCache(cacheKey, entries)
+  return entries
+}
+
+// "2026-10-14" → "Oct 14". Split by hand: new Date('YYYY-MM-DD') is UTC
+// midnight, which renders as the day before in New York.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+export function shortDate(ymdStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''))
+  if (!m) return null
+  return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}`
+}
+
+// The one-line "where and when" a NYT tile and sheet show: "Hulu · S2 · Oct 14".
+export function nytLine(nyt) {
+  if (!nyt) return null
+  return [nyt.service, nyt.season > 1 ? `S${nyt.season}` : null, shortDate(nyt.date)].filter(Boolean).join(' · ') || null
+}
+
+export function nytRows(blocks = NYT_PICKS) {
+  return [...blocks]
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .slice(0, NYT_MONTHS_SHOWN)
+    .map((block) => ({
+      key: `nyt.${block.month}`,
+      title: `NYT picks · ${block.label}`,
+      kicker: 'New York Times',
+      fetch: () => fetchNytRow(block),
+    }))
+}
+
 // The full feed definition, in render order. Each row lazily fetches itself so
 // the tab paints immediately and fills in as TMDB answers.
 export function feedRows() {
   return [
+    ...nytRows(),
     { key: 'trending', title: 'Trending this week', kicker: 'Everywhere', fetch: fetchTrendingRow },
     ...PROVIDERS.map((p) => ({
       key: `new.${p.key}`,

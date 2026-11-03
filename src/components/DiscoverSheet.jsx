@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Cover, Mono, btnGhost, btnPrimary } from './primitives'
 import { TypeIcon } from './TypeIcon'
 import { metaFor } from '../lib/meta'
-import { fetchWatchProviders, fetchTrailerUrl, youtubeSearchUrl } from '../lib/discover'
+import { fetchWatchProviders, fetchTrailerUrl, youtubeSearchUrl, nytLine } from '../lib/discover'
 
 // The sheet behind a tapped Discover tile: what it is, where it streams, and
 // the two things Cue can do with it — put it in the queue, or send it to the
@@ -116,7 +116,7 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
         animation: 'sheet-in 280ms cubic-bezier(0.2,0.7,0.2,1)',
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-          <Mono size={9} dim>{unreleased ? 'Not out yet' : 'From the feed'}</Mono>
+          <Mono size={9} dim>{f.nyt ? 'NYT pick' : unreleased ? 'Not out yet' : 'From the feed'}</Mono>
           <button onClick={onClose} style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}>Close</button>
         </div>
 
@@ -164,6 +164,32 @@ export const DiscoverSheet = ({ entry, unreleased, inLibrary, onClose, onQueue, 
             </a>
           </div>
         </div>
+
+        {/* NYT picks lead with why the Times picked it, then where and when. */}
+        {f.nyt && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 6,
+            paddingLeft: 10, borderLeft: '2px solid var(--signal)',
+          }}>
+            {f.nyt.note && (
+              <p style={{
+                margin: 0, fontFamily: 'var(--display)', fontStyle: 'italic',
+                fontSize: 15, lineHeight: 1.4, color: 'var(--text)',
+              }}>{f.nyt.note}</p>
+            )}
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+              {nytLine(f.nyt) && <Mono size={9} dim>{nytLine(f.nyt)}</Mono>}
+              {f.nyt.source && (
+                <a
+                  href={f.nyt.source}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontFamily: 'var(--ui)', fontSize: 9, letterSpacing: '0.08em', color: 'var(--text-soft)' }}
+                >NYT article ↗</a>
+              )}
+            </div>
+          </div>
+        )}
 
         {f.synopsis && (
           <p style={{

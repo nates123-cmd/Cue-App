@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Cover, Mono } from './primitives'
 import { TypeIcon } from './TypeIcon'
+import { nytLine } from '../lib/discover'
 
 // One horizontally-scrolling row of the Discover feed ("New on Netflix", …).
 //
@@ -26,6 +27,8 @@ function asCoverItem(entry) {
 const Tile = ({ entry, inLibrary, onOpen }) => {
   const f = entry.facts || {}
   const year = f.release_year || f.first_air_year || null
+  // An NYT pick says where and when it streams; every other row says the year.
+  const sub = nytLine(f.nyt) || year
   return (
     <button
       onClick={() => onOpen(entry)}
@@ -78,7 +81,7 @@ const Tile = ({ entry, inLibrary, onOpen }) => {
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
           overflow: 'hidden',
         }}>{entry.title}</div>
-        {year && <Mono size={8.5} dim>{year}</Mono>}
+        {sub && <Mono size={8.5} dim>{sub}</Mono>}
       </div>
     </button>
   )

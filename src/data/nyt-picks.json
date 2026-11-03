@@ -1,0 +1,19 @@
+[
+  {
+    "month": "2026-10",
+    "label": "October",
+    "source": "https://www.nytimes.com/2026/10/01/arts/television/movies-tv-shows-october-2026-streaming.html",
+    "picks": [
+      { "title": "Carrie", "type": "tv", "year": 2026, "season": 1, "service": "Prime Video", "date": "2026-10-07", "note": "Mike Flanagan's modern, expanded take on the Stephen King novel." },
+      { "title": "Love of Your Life", "type": "movie", "year": 2026, "service": "Prime Video", "date": "2026-10-14", "note": "Margaret Qualley romance across a decade, directed by Rachel Morrison." },
+      { "title": "Kill Jackie", "type": "tv", "year": 2026, "season": 1, "service": "AMC+", "date": "2026-10-02", "note": "Catherine Zeta-Jones as an art dealer hunting the assassins sent for her." },
+      { "title": "Yaga", "type": "tv", "year": 2026, "season": 1, "service": "AMC+", "date": "2026-10-23", "note": "Missing-heir mystery in a coastal Canadian town, Baba Yaga lore, Carrie-Anne Moss." },
+      { "title": "Tenzing", "type": "movie", "year": 2026, "service": "Apple TV", "date": "2026-10-16", "note": "Tenzing Norgay biopic, Tom Hiddleston as Hillary, directed by Jennifer Peedom." },
+      { "title": "VisionQuest", "type": "tv", "year": 2026, "season": 1, "service": "Disney+", "date": "2026-10-14", "note": "Paul Bettany's Vision on the run; closes the WandaVision trilogy." },
+      { "title": "War", "type": "tv", "year": 2026, "season": 1, "service": "HBO Max", "date": "2026-10-01", "note": "Law-firm satire anthology; Sienna Miller vs. Dominic West in a divorce." },
+      { "title": "The Lowdown", "type": "tv", "year": 2025, "season": 2, "service": "Hulu", "date": "2026-10-14", "note": "Ethan Hawke's Tulsa reporter returns; Tommy Lee Jones joins as his father." },
+      { "title": "Avatar: Seven Havens", "type": "tv", "year": 2026, "season": 1, "service": "Paramount+", "date": "2026-10-09", "note": "New Avatar series from the original creators, set centuries after Korra." },
+      { "title": "Crystal Lake", "type": "tv", "year": 2026, "season": 1, "service": "Peacock", "date": "2026-10-15", "note": "A24's Friday the 13th prequel, Linda Cardellini as Pamela Voorhees." }
+    ]
+  }
+]
